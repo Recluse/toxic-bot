@@ -10,6 +10,7 @@ from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
 from i18n import get_text
+from utils.tg_safe import safe_edit
 from handlers.admin_menu.callbacks import (
     MENU_TOXICITY, MENU_FREQUENCY, MENU_COOLDOWN,
     MENU_CHAIN, MENU_MIN_WORDS, MENU_USER_MGMT, MENU_EXIT,
@@ -47,11 +48,7 @@ async def send_main_menu(
     keyboard = build_main_keyboard(lang)
 
     if edit and update.callback_query:
-        await update.callback_query.edit_message_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode=ParseMode.HTML,
-        )
+        await safe_edit(update, text, keyboard)
     else:
         await update.effective_message.reply_text(
             text,

@@ -9,15 +9,12 @@ All three follow the same pattern:
 They are combined in one file since the pattern is identical.
 """
 
-import asyncio
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.error import BadRequest, RetryAfter
 from telegram.ext import ContextTypes
-from telegram.constants import ParseMode
 
 import db.chat_settings as settings_db
 from i18n import get_text
+from utils.tg_safe import safe_edit
 from handlers.admin_menu.callbacks import (
     SET_COOLDOWN, SET_CHAIN, SET_MIN_WORDS, MENU_MAIN,
 )
@@ -33,44 +30,13 @@ def _mark(value, current) -> str:
     return f"● {value}" if value == current else str(value)
 
 
-async def _safe_edit(update: Update, text: str, reply_markup) -> None:
-    """
-    Edit the callback query message safely.
-    Handles two known Telegram API edge cases:
-      - message is not modified: user tapped the already-selected option
-      - RetryAfter: flood control triggered by rapid taps — wait and retry once
-    """
-    try:
-        await update.callback_query.edit_message_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.HTML,
-        )
-    except BadRequest as exc:
-        if "message is not modified" in str(exc).lower():
-            await update.callback_query.answer()
-        else:
-            raise
-    except RetryAfter as exc:
-        # Flood control — wait the required delay then retry once
-        await asyncio.sleep(exc.retry_after + 0.5)
-        await update.callback_query.edit_message_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.HTML,
-        )
-
-
 # ---------------------------------------------------------------------------
 # Cooldown menu
 # ---------------------------------------------------------------------------
 
 def build_cooldown_keyboard(lang: str, current: int) -> InlineKeyboardMarkup:
     buttons = [
-        InlineKeyboardButton(
-            _mark(v, current),
-            callback_data=SET_COOLDOWN(v),
-        )
+        InlineKeyboardButton(_mark(v, current), callback_data=SET_COOLDOWN(v))
         for v in _COOLDOWN_OPTIONS
     ]
     return InlineKeyboardMarkup([
@@ -86,8 +52,8 @@ async def show_cooldown_menu(
     lang: str,
 ) -> None:
     current = settings["reply_cooldown_sec"]
-    text    = get_text("cooldown_title", lang, val=current)
-    await _safe_edit(update, text, build_cooldown_keyboard(lang, current))
+    await safe_edit(update, get_text("cooldown_title", lang, val=current),
+                    build_cooldown_keyboard(lang, current))
 
 
 async def handle_set_cooldown(
@@ -112,10 +78,7 @@ async def handle_set_cooldown(
 
 def build_chain_keyboard(lang: str, current: int) -> InlineKeyboardMarkup:
     buttons = [
-        InlineKeyboardButton(
-            _mark(v, current),
-            callback_data=SET_CHAIN(v),
-        )
+        InlineKeyboardButton(_mark(v, current), callback_data=SET_CHAIN(v))
         for v in _CHAIN_OPTIONS
     ]
     return InlineKeyboardMarkup([
@@ -131,8 +94,8 @@ async def show_chain_menu(
     lang: str,
 ) -> None:
     current = settings["reply_chain_depth"]
-    text    = get_text("chain_title", lang, val=current)
-    await _safe_edit(update, text, build_chain_keyboard(lang, current))
+    await safe_edit(update, get_text("chain_title", lang, val=current),
+                    build_chain_keyboard(lang, current))
 
 
 async def handle_set_chain(
@@ -157,10 +120,7 @@ async def handle_set_chain(
 
 def build_min_words_keyboard(lang: str, current: int) -> InlineKeyboardMarkup:
     buttons = [
-        InlineKeyboardButton(
-            _mark(v, current),
-            callback_data=SET_MIN_WORDS(v),
-        )
+        InlineKeyboardButton(_mark(v, current), callback_data=SET_MIN_WORDS(v))
         for v in _MIN_WORDS_OPTIONS
     ]
     return InlineKeyboardMarkup([
@@ -176,8 +136,8 @@ async def show_min_words_menu(
     lang: str,
 ) -> None:
     current = settings["min_words"]
-    text    = get_text("min_words_title", lang, val=current)
-    await _safe_edit(update, text, build_min_words_keyboard(lang, current))
+    await safe_edit(update, get_text("min_words_title", lang, val=current),
+                    build_min_words_keyboard(lang, current))
 
 
 async def handle_set_min_words(
