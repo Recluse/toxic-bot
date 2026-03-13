@@ -1,0 +1,80 @@
+{
+  "start_group":             "Oh. You found me. How unfortunate — for you.",
+  "start_pm":                "A private conversation. How intimate.\n\nType /help to see what I can and cannot be bothered to do.",
+  "start_lang_prompt":       "First things first. Choose a language for this chat:",
+
+  "help_short":              "I answer when I feel like it. Send /help in a private message for the full manual.",
+  "help_full":               "📖 <b>Manual — for those who need one</b>\n\n<b>Public commands:</b>\n/start — Wake me up. I was not sleeping, I was ignoring you.\n/help — This. More detailed in DMs.\n/about — Current personality settings for this chat.\n/reset — Erase your own conversation history with me.\n/toxicity_demo — Watch me say the same thing five different ways.\n\n<b>Admin commands (group admins only):</b>\n/settings — Open the settings menu.\n\n<b>How I decide to answer:</b>\n• In groups I respond to roughly 1 in every N messages (N set by admins).\n• I always respond to direct replies to my messages, but no more than once per cooldown period per person.\n• Messages shorter than the minimum word count are beneath my notice.\n• Reply chains are read for context — I see what you were actually talking about.\n\n<b>Toxicity levels:</b>\n1 — Cold Disappointment\n2 — Logical Dissection\n3 — Psychological Pressure (default)\n4 — Weaponised Wit\n5 — Nuclear Wednesday",
+
+  "about": "This is <b>{chat_title}</b>.\nToxicity level: <b>{level}/5</b> ({level_name})\nLanguage: <b>{chat_lang}</b>\nReply frequency: 1 in {freq_min}–{freq_max} messages\nCooldown: {cooldown}s per user",
+
+  "reset_done":              "Your history is gone. Nothing of value was lost.",
+  "reset_no_history":        "There was nothing to delete. Typical.",
+
+  "demo_header":             "Same question. Five levels of contempt. Observe:\n\n<i>Question: \"I think I'm pretty smart.\"</i>\n",
+  "demo_level_label":        "\n<b>Level {n} — {name}:</b>\n",
+
+  "lang_choose":             "Choose the language for this chat:",
+  "lang_set":                "Language set to English.",
+  "lang_invalid":            "Unknown language. Try en, ru, or ua.",
+
+  "admin_only":              "Admin access required. Which you do not have.",
+  "group_only":              "This command is for group chats.",
+  "error_generic":           "Something broke. Probably your fault, indirectly.",
+  "cooldown_active":         "I already answered you recently. Wait.",
+
+  "menu_title":              "<b>Bot Settings</b>\nAdjust my behaviour. Try not to make things worse.",
+  "menu_back":               "← Back",
+  "menu_exit":               "✕ Close",
+
+  "menu_toxicity":           "☠ Toxicity level",
+  "menu_frequency":          "🎲 Reply frequency",
+  "menu_cooldown":           "⏱ User cooldown",
+  "menu_reply_chain":        "🔗 Reply chain depth",
+  "menu_min_words":          "📏 Minimum words",
+  "menu_user_mgmt":          "👤 User management",
+
+  "toxicity_title":          "<b>Toxicity level</b>\nCurrent: <b>{current}/5</b> — {level_name}\n\nSelect new level:",
+  "toxicity_saved":          "Toxicity set to {level}/5.",
+  "toxicity_level_1":        "1 — Cold Disappointment",
+  "toxicity_level_2":        "2 — Logical Dissection",
+  "toxicity_level_3":        "3 — Psychological Pressure",
+  "toxicity_level_4":        "4 — Weaponised Wit",
+  "toxicity_level_5":        "5 — Nuclear Wednesday",
+
+  "freq_title":              "<b>Reply frequency</b>\nI respond to 1 in every N messages, where N is random in the range below.\nCurrent: <b>{min}–{max}</b>",
+  "freq_min_label":          "Min: {val}",
+  "freq_max_label":          "Max: {val}",
+  "freq_decrease":           "▼",
+  "freq_increase":           "▲",
+  "freq_save":               "Save",
+  "freq_saved":              "Frequency set to {min}–{max}.",
+  "freq_invalid":            "Min must be less than or equal to Max.",
+
+  "cooldown_title":          "<b>User cooldown</b>\nMinimum seconds between my replies to the same user.\nCurrent: <b>{val}s</b>\n\nSelect:",
+  "cooldown_saved":          "Cooldown set to {val} seconds.",
+
+  "chain_title":             "<b>Reply chain depth</b>\nHow many messages back I read in a reply chain for context.\nCurrent: <b>{val}</b>\n\nSelect:",
+  "chain_saved":             "Reply chain depth set to {val}.",
+
+  "min_words_title":         "<b>Minimum words</b>\nMessages shorter than this are ignored entirely.\nCurrent: <b>{val}</b>\n\nSelect:",
+  "min_words_saved":         "Minimum words set to {val}.",
+
+  "user_mgmt_title":         "<b>User management</b>\nSelect action:",
+  "user_mgmt_list_empty":    "No user data in this chat yet.",
+  "user_mgmt_select_user":   "Select a user:",
+  "reset_chat_prompt":       "Delete ALL history and profiles in this chat?",
+  "reset_chat_confirm":      "All chat history and profiles cleared.",
+  "reset_user_done":         "History and profile cleared for {username}.",
+  "view_summary_none":       "No profile data yet for {username}.",
+  "view_summary":            "<b>Profile: {username}</b>\n\n{summary}",
+
+  "level_name_1":            "Cold Disappointment",
+  "level_name_2":            "Logical Dissection",
+  "level_name_3":            "Psychological Pressure",
+  "level_name_4":            "Weaponised Wit",
+  "level_name_5":            "Nuclear Wednesday",
+
+  "toxic_no_reply":          "Reply to someone's message with /toxic to target them.",
+  "toxic_no_text":   "That message has no text to work with."
+}

@@ -1,0 +1,67 @@
+# Secrets and local config
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+pip-wheel-metadata/
+*.manifest
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# systemd local overrides
+*.service.local
+
+# Database dumps and backups
+*.sql
+*.dump
+*.bak
+
+# Jupyter
+.ipynb_checkpoints/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ruff / black
+.ruff_cache/
