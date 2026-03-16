@@ -14,6 +14,7 @@ import logging
 from telegram import Update, ReplyParameters
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode, ChatAction
+from ai.vision import get_image_base64
 
 import db.chat_settings as settings_db
 import db.history as history_db
@@ -219,6 +220,99 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             toxicity_level=settings["toxicity_level"],
             lang=lang,
             extra_context=extra_context,
+        )
+    except Exception as exc:
+        logger.error("cmd_toxic get_reply failed chat_id=%d: %s", chat_id, exc)
+        reply = get_text("error_generic", lang)
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=reply,
+        reply_parameters=ReplyParameters(
+            message_id=target.message_id,
+            chat_id=chat_id,
+        ),
+    )
+
+async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /toxic — Admin-only command to force the bot to reply to a specific message.
+
+    Usage: reply to any message with /toxic.
+    Supports text, captions, and photo messages.
+    The /toxic command message itself is deleted after triggering.
+    Non-admins: command is silently deleted.
+    """
+    chat_id  = update.effective_chat.id
+    settings = await settings_db.get_or_create(chat_id)
+    lang     = settings["lang"]
+
+    if not update.message.reply_to_message:
+        await update.message.reply_text(get_text("toxic_no_reply", lang))
+        return
+
+    # Admin check — silently delete if caller is not an admin
+    if not await is_chat_admin(update):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    target = update.message.reply_to_message
+    text   = (target.text or target.caption or "").strip()
+
+    # --- Handle photo target ---
+    image_base64: str | None = None
+    if target.photo:
+        try:
+            image_base64 = await get_image_base64(context.bot, target.photo[-1].file_id)
+            # Frame the content so the LLM treats this as a user-sent photo,
+            # not as a bot-generated description — keeps persona response natural
+            if not text:
+                text = "[user sent a photo with no caption]"
+            else:
+                text = f"[user sent a photo with caption: {text}]"
+        except Exception as exc:
+            logger.error("cmd_toxic: failed to download photo chat_id=%d: %s", chat_id, exc)
+            await update.message.reply_text(get_text("error_generic", lang))
+            return
+
+    elif not text:
+        await update.message.reply_text(get_text("toxic_no_text", lang))
+        return
+
+    # Delete the /toxic command message to keep the chat clean
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    target_user     = target.from_user
+    target_user_id  = target_user.id if target_user else update.effective_user.id
+    target_username = (
+        target_user.username or target_user.full_name
+        if target_user else "user"
+    )
+
+    extra_context = await collect_chain(
+        target,
+        context.bot.id,
+        max_depth=settings["reply_chain_depth"],
+    )
+
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    try:
+        reply = await get_reply(
+            chat_id=chat_id,
+            user_id=target_user_id,
+            username=target_username,
+            user_text=text,
+            toxicity_level=settings["toxicity_level"],
+            lang=lang,
+            extra_context=extra_context,
+            image_base64=image_base64,
         )
     except Exception as exc:
         logger.error("cmd_toxic get_reply failed chat_id=%d: %s", chat_id, exc)

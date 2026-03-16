@@ -41,6 +41,7 @@ precision — powered by Groq LLM via a Cloudflare AI Gateway.
 - Cloudflare AI Gateway integration for observability and rate limiting
 - Global error handler — no silent crashes
 - Flood control handling — retries automatically on Telegram rate limits
+- Multimodal support: `/explain` works on text, photos, voice messages
 
 ---
 
@@ -48,25 +49,34 @@ precision — powered by Groq LLM via a Cloudflare AI Gateway.
 
 ```
 Telegram  ←→  python-telegram-bot  ←→  handlers/
-                                         ├── commands_public.py
-                                         ├── messages.py
-                                         ├── lifecycle.py
-                                         ├── superadmin.py
-                                         └── admin_menu/
-                                               ├── main_menu.py
-                                               ├── simple_choice_menus.py
-                                               └── router.py
-                                    ←→  ai/
-                                         ├── client.py
-                                         ├── responder.py
-                                         ├── prompts.py
-                                         └── summarizer.py
-                                    ←→  db/
-                                         ├── pool.py
-                                         ├── migrations.py
-                                         ├── chat_settings.py
-                                         ├── history.py
-                                         └── chats.py
+                                       ├── commands_public.py
+                                       ├── commands_explain.py
+                                       ├── messages.py
+                                       ├── lifecycle.py
+                                       ├── superadmin.py
+                                       ├── language_select.py
+                                       └── admin_menu/
+                                           ├── callbacks.py
+                                           ├── main_menu.py
+                                           ├── frequency_menu.py
+                                           ├── toxicity_menu.py
+                                           ├── simple_choice_menus.py
+                                           ├── user_management_menu.py
+                                           └── router.py
+                               ←→  ai/
+                                       ├── client.py
+                                       ├── prompts.py
+                                       ├── responder.py
+                                       ├── summarizer.py
+                                       ├── transcriber.py
+                                       └── vision.py
+                               ←→  db/
+                                       ├── pool.py
+                                       ├── migrations.py
+                                       ├── chat_settings.py
+                                       ├── history.py
+                                       ├── chats.py
+                                       └── user_profiles.py
 ```
 
 LLM requests go through:
@@ -78,11 +88,11 @@ bot  →  Cloudflare AI Gateway  →  Groq API  →  LLM model
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.12
 - PostgreSQL 14+
-- A Cloudflare account with AI Gateway configured for Groq
-- A Groq API key
-- A Telegram bot token from [@BotFather](https://t.me/BotFather)
+- Cloudflare account with AI Gateway configured for Groq
+- Groq API key
+- Telegram bot token from [@BotFather](https://t.me/BotFather)
 
 ---
 
@@ -92,7 +102,8 @@ bot  →  Cloudflare AI Gateway  →  Groq API  →  LLM model
 git clone https://github.com/Recluse/toxic-bot
 cd toxic-bot
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate  # Linux/Mac
+# .venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your credentials
@@ -132,25 +143,25 @@ All values are optional — shown with defaults:
 ```ini
 [bot]
 max_history_messages = 20
-default_lang         = en
+default_lang = en
 
 [defaults]
-toxicity_level     = 3
-freq_min           = 5
-freq_max           = 15
+toxicity_level = 3
+freq_min = 5
+freq_max = 15
 reply_cooldown_sec = 60
-reply_chain_depth  = 5
-min_words          = 5
+reply_chain_depth = 5
+min_words = 5
 
 [groq]
-model       = moonshotai/kimi-k2-instruct-0905
+model = moonshotai/kimi-k2-instruct-0905  # or llama3-groq-70b-8192-tool-use-preview
 temperature = 0.85
-max_tokens  = 1024
-top_p       = 0.95
+max_tokens = 1024
+top_p = 0.95
 
 [summarizer]
-model       = llama-3.3-70b-versatile
-max_tokens  = 512
+model = llama-3.3-70b-versatile
+max_tokens = 512
 temperature = 0.3
 ```
 
@@ -161,15 +172,14 @@ temperature = 0.3
 Migrations run automatically on every startup via `db/migrations.py`.
 No manual SQL required. Tables created:
 
-| Table           | Purpose                                            |
-|-----------------|----------------------------------------------------|
-| `chat_settings` | Per-chat configuration (toxicity, frequency, lang) |
-| `history`       | Conversation message history per chat              |
-| `chats`         | Membership tracking (joined, active, kicked)       |
+| Table            | Purpose                                                |
+|------------------|--------------------------------------------------------|
+| `chat_settings`  | Per-chat configuration (toxicity, frequency, lang)     |
+| `message_history`| Conversation message history per chat                  |
+| `chats`          | Membership tracking (joined, active, kicked)           |
+| `user_profiles`  | Per-user psychological/behavioral summaries            |
 
-Chats are auto-registered on the first incoming message, so even groups
-added before lifecycle tracking was enabled will appear in `/sa_chats`
-after the first activity.
+Chats are auto-registered on the first incoming message.
 
 ---
 
@@ -209,10 +219,6 @@ journalctl -u toxic-bot -f
 
 ### Register bot commands (one-time)
 
-Reads `BOT_TOKEN` and `SUPERADMIN_IDS` from `.env`, registers all commands
-for English, Russian, and Ukrainian across all scopes, then writes
-`COMMANDS_REGISTERED=1` to `.env` to prevent accidental re-runs.
-
 ```bash
 python setup_commands.py
 
@@ -226,124 +232,82 @@ python setup_commands.py --force
 
 ### Public (all chats)
 
-| Command          | Where       | Description                                |
-|------------------|-------------|--------------------------------------------|
-| `/start`         | PM + groups | Greeting from the bot                      |
-| `/help`          | PM + groups | Usage instructions                         |
-| `/about`         | PM + groups | Current personality settings for this chat |
-| `/reset`         | PM + groups | Clear your personal conversation history   |
-| `/toxicity_demo` | PM + groups | Demo all toxicity levels                   |
+| Command            | Where       | Description                                      |
+|--------------------|-------------|--------------------------------------------------|
+| `/start`           | PM + groups | Greeting from the bot                            |
+| `/help`            | PM + groups | Usage instructions                               |
+| `/about`           | PM + groups | Current personality settings for this chat       |
+| `/reset`           | PM + groups | Clear your personal conversation history         |
+| `/toxicity_demo`   | PM + groups | Demo all toxicity levels                         |
 
 ### Admin (group admins only)
 
-| Command      | Where  | Description                                    |
-|--------------|--------|------------------------------------------------|
-| `/toxic`     | Groups | Reply to a message to force the bot to respond |
-| `/settings`  | Groups | Open the inline settings menu                  |
+| Command     | Where  | Description                                 |
+|-------------|--------|---------------------------------------------|
+| `/toxic`    | Groups | Reply to a message to force the bot to respond |
+| `/settings` | Groups | Open the inline settings menu                |
 
-Both commands are silently deleted if the caller is not an admin —
-no public "admin only" message to avoid noise and trolling.
+Admin commands are silently deleted if caller is not admin.
+
+### Explain (reply to message)
+
+| Command  | Where       | Description                                      |
+|----------|-------------|--------------------------------------------------|
+| `/explain` | PM + groups | Scientific/factual analysis of text/photo/voice  |
 
 ---
 
 ## Superadmin Features
 
-Superadmins are defined by Telegram user ID in `SUPERADMIN_IDS`.
-All superadmin commands work only in **private chat** with the bot.
-Non-superadmins calling these commands get no response — the commands
-are invisible to them in the menu.
+Superadmins (`SUPERADMIN_IDS` in `.env`). Commands work **only in private chat** with bot.
 
 ### Commands
 
-| Command          | Description                                        |
-|------------------|----------------------------------------------------|
-| `/sa_chats`      | List all active chats with IDs and join dates      |
-| `/sa_stats`      | Total/active/inactive chat counts by type          |
-| `/sa_broadcast`  | Send a message to all active groups (conversation) |
-| `/cancel`        | Abort an in-progress broadcast                     |
+| Command          | Description                                      |
+|------------------|--------------------------------------------------|
+| `/sa_chats`      | List all active chats with IDs and join dates    |
+| `/sa_stats`      | Total/active/inactive chat counts by type        |
+| `/sa_broadcast`  | Send message to all active groups (conversation) |
+| `/cancel`        | Abort in-progress broadcast                      |
 
 ### Automatic PM notifications
 
-The bot sends a message to every superadmin when:
-
-- **Added to a chat** — title, chat ID, type
-- **Kicked from a chat** — title, chat ID, type
-
-### `/sa_chats` example output
-
-```
-Active chats: 3
-
-[supergroup] Dev Team Chat
-    id: -1001234567890  joined: 2026-03-10
-[group] Friends
-    id: -1009876543210  joined: 2026-03-12
-[supergroup] Public Channel Test
-    id: -1001111111111  joined: 2026-03-13
-```
-
-### `/sa_stats` example output
-
-```
-Bot statistics
-
-Active chats:   3
-Inactive chats: 1
-Total ever:     4
-
-Active by type:
-  supergroup: 2
-  group: 1
-```
-
-### `/sa_broadcast` flow
-
-```
-You:  /sa_broadcast
-Bot:  Send the message to broadcast to all active group chats.
-      Plain text only. /cancel to abort.
-You:  Hey everyone, bot was just updated!
-Bot:  Broadcast complete.
-      Sent: 3  Failed: 0
-```
+- **Added to chat** — title, chat ID, type
+- **Kicked from chat** — title, chat ID, type
 
 ---
 
 ## Admin Settings Menu
 
-Group admins open `/settings` to configure the bot per chat via inline keyboard.
-All changes take effect immediately without a restart.
+Group admins: `/settings` → inline keyboard. Changes apply immediately.
 
-| Setting           | Range / Options | Description                                      |
-|-------------------|-----------------|--------------------------------------------------|
-| Toxicity level    | 1 – 5           | 1 = mild sarcasm, 5 = full psychological warfare |
-| Reply frequency   | configurable    | How often the bot joins the conversation         |
-| Cooldown          | 30 / 60 / 120 / 300 sec | Minimum time between bot replies         |
-| Reply chain depth | 3 / 5 / 7 / 10  | How deep into a reply chain the bot will follow  |
-| Min words         | 3 / 5 / 7 / 10  | Ignore messages shorter than this                |
-| Language          | en / ru / uk    | Language for bot system messages and menu        |
+| Setting            | Range / Options     | Description                                      |
+|--------------------|---------------------|--------------------------------------------------|
+| Toxicity level     | 1–5                 | 1=mild, 5=nuclear                                |
+| Reply frequency    | min–max (random)    | How often bot responds                           |
+| User cooldown      | 30/60/120/300 sec   | Time between replies to same user                |
+| Reply chain depth  | 3/5/7/10            | Messages back in reply chain                     |
+| Minimum words      | 3/5/7/10            | Ignore shorter messages                          |
+| User management    | List/reset profiles | View/delete user summaries                       |
 
 ---
 
 ## Personality System
 
-The bot behaves like Wednesday Addams but more analytically toxic:
+Wednesday Addams × analytical toxicity:
 
-- **Logical pressure** — identifies weak reasoning and dismantles it precisely
-- **Psychological targeting** — detects insecurity, overconfidence, and contradictions
-- **Wit over insults** — every response has a point, not just noise
-- **Context awareness** — uses conversation history to build on prior interactions
-- **Real knowledge** — can and will cite actual facts to reinforce a point
+- **Logical dissection** — names fallacies, cites facts
+- **Psychological pressure** — targets specific weaknesses
+- **Wit-first** — precise, never generic insults
+- **Context-aware** — uses history + user profiles
 
-Toxicity levels:
-
-| Level | Behaviour                                           |
-|-------|-----------------------------------------------------|
-| 1     | Dry wit, mild condescension                         |
-| 2     | Visible impatience with your reasoning              |
-| 3     | Active deconstruction of your logic (default)       |
-| 4     | Personal, surgical, hard to ignore                  |
-| 5     | Full Wednesday — cold, precise, slightly terrifying |
+| Level | Name                     | Style                              |
+|-------|--------------------------|------------------------------------|
+| 1     | Cold Disappointment      | Dry, distant observation           |
+| 2     | Logical Dissection       | Forensic reasoning takedown        |
+| 3     | Psychological Pressure   | Surgical insecurity probing (def)  |
+| 4     | Weaponised Wit           | Compliment → twist → dagger        |
+| 5     | Nuclear Wednesday        | Full verdict, documented           |
 
 ---
 
@@ -351,43 +315,57 @@ Toxicity levels:
 
 ```
 toxic-bot/
-├── bot.py                    # Entry point, handler registration, error handler
-├── config.py                 # Config loader (dataclasses + .env + config.ini)
-├── config.ini                # Non-secret defaults
-├── .env                      # Secrets (not committed)
-├── .env.example              # Template
-├── setup_commands.py         # One-time Telegram command registration script
+├── .env*                 # Secrets (not committed)
+├── .env.example          # Template
+├── .gitignore
+├── README.{md,ru.md,uk.md}
+├── config.ini            # Non-secret defaults
+├── config.py             # Config loader dataclasses
+├── bot.py                # Entrypoint, handlers, migrations
+├── setup_commands.py     # Telegram command registration
 ├── requirements.txt
-├── scripts/
-│   └── backfill_chats.py     # One-time script to register pre-existing chats
 ├── ai/
-│   ├── client.py             # Async Groq client via Cloudflare AI Gateway
-│   ├── responder.py          # get_reply() — main LLM call with history
-│   ├── prompts.py            # System prompt builder per toxicity level + lang
-│   └── summarizer.py         # Background conversation summariser
+│   ├── client.py             # AsyncOpenAI → CF Gateway → Groq
+│   ├── prompts.py            # 5 levels × 3 langs + injection guard
+│   ├── responder.py          # Main get_reply() pipeline
+│   ├── summarizer.py         # Background user profile summaries
+│   ├── transcriber.py        # Voice → text (Whisper)
+│   └── vision.py             # Photo → base64 multimodal
 ├── db/
-│   ├── pool.py               # asyncpg connection pool
-│   ├── migrations.py         # Idempotent DDL migrations, run on every startup
-│   ├── chat_settings.py      # Per-chat settings CRUD
-│   ├── history.py            # Conversation history CRUD
-│   └── chats.py              # Chat membership tracking CRUD + stats
+│   ├── pool.py               # asyncpg pool
+│   ├── migrations.py         # Idempotent DDL
+│   ├── chat_settings.py      # Per-chat CRUD
+│   ├── history.py            # Message history CRUD
+│   ├── chats.py              # Chat tracking CRUD
+│   └── user_profiles.py      # User psych profiles CRUD
 ├── handlers/
 │   ├── commands_public.py    # /start /help /about /reset /toxicity_demo /toxic
-│   ├── messages.py           # Main message handler with frequency + cooldown logic
-│   ├── lifecycle.py          # Bot add/remove events + superadmin PM notifications
-│   ├── superadmin.py         # /sa_chats /sa_stats /sa_broadcast
+│   ├── commands_explain.py   # /explain (multimodal)
+│   ├── messages.py           # Main handler + freq/cooldown logic
+│   ├── lifecycle.py          # Join/leave + superadmin PMs
+│   ├── superadmin.py         # /sa_* commands
+│   ├── language_select.py    # Language picker
 │   └── admin_menu/
-│       ├── callbacks.py      # Callback data constants
-│       ├── main_menu.py      # Inline settings menu entry point
-│       ├── simple_choice_menus.py  # Cooldown / chain depth / min_words menus
-│       └── router.py         # Single CallbackQueryHandler dispatcher
+│       ├── callbacks.py          # Callback constants
+│       ├── main_menu.py          # Settings entry
+│       ├── frequency_menu.py     # Freq min/max
+│       ├── toxicity_menu.py      # Toxicity levels
+│       ├── simple_choice_menus.py# Cooldown/chain/minwords
+│       ├── user_management_menu.py# User profiles UI
+│       └── router.py             # Callback dispatcher
 ├── i18n/
-│   └── __init__.py           # get_text(key, lang) — all UI strings
+│   ├── __init__.py         # gettext(key, lang, **kwargs)
+│   ├── en.json
+│   ├── ru.json
+│   └── ua.json
 └── utils/
-    ├── admin_check.py        # is_chat_admin() with superadmin bypass
-    ├── rate_limiter.py       # Per-user cooldown tracker
-    └── reply_chain.py        # Reply chain context collector
+    ├── admin_check.py     # is_chat_admin() + superadmin
+    ├── rate_limiter.py    # Per-user cooldowns
+    ├── reply_chain.py     # Reply chain collector
+    └── tg_safe.py         # Safe send/edit wrappers (RetryAfter, etc.)
 ```
+
+*Not committed
 
 ---
 

@@ -25,40 +25,42 @@ class DefaultChatConfig:
     Fallback values applied to a new chat row before an admin
     customises anything via the inline settings menu.
     """
-    toxicity_level: int
-    freq_min: int
-    freq_max: int
+    toxicity_level:     int
+    freq_min:           int
+    freq_max:           int
     reply_cooldown_sec: int
-    reply_chain_depth: int
-    min_words: int
+    reply_chain_depth:  int
+    min_words:          int
 
 
 @dataclass(frozen=True)
 class GroqConfig:
-    model: str
-    temperature: float
-    max_tokens: int
-    top_p: float
-    api_key: str
-    base_url: str
+    model:         str
+    vision_model:  str
+    whisper_model: str
+    temperature:   float
+    max_tokens:    int
+    top_p:         float
+    api_key:       str
+    base_url:      str
 
 
 @dataclass(frozen=True)
 class SummarizerConfig:
     """Separate model config for async background summary generation."""
-    model: str
-    max_tokens: int
+    model:       str
+    max_tokens:  int
     temperature: float
 
 
 @dataclass(frozen=True)
 class AppConfig:
     telegram_token: str
-    superadmin_ids: frozenset  # frozenset[int] — superadmin Telegram user IDs
-    bot: BotConfig
-    defaults: DefaultChatConfig
-    groq: GroqConfig
-    summarizer: SummarizerConfig
+    superadmin_ids: frozenset   # frozenset[int]
+    bot:            BotConfig
+    defaults:       DefaultChatConfig
+    groq:           GroqConfig
+    summarizer:     SummarizerConfig
 
 
 def _require_env(name: str) -> str:
@@ -73,10 +75,14 @@ def _require_env(name: str) -> str:
 
 
 def _cf_groq_url(account_id: str, gateway_id: str) -> str:
-    """Build the Cloudflare AI Gateway base URL for Groq."""
+    """
+    Build the Cloudflare AI Gateway base URL for Groq,
+    including the /openai/v1 path suffix required by the OpenAI SDK.
+    The SDK appends /chat/completions etc. to this base.
+    """
     return (
         f"https://gateway.ai.cloudflare.com/v1/"
-        f"{account_id}/{gateway_id}/groq"
+        f"{account_id}/{gateway_id}/groq/openai/v1"
     )
 
 
@@ -84,8 +90,7 @@ def _parse_superadmin_ids() -> frozenset:
     """
     Parse SUPERADMIN_IDS env variable.
     Expects comma-separated integer Telegram user IDs.
-    Returns empty frozenset if not set — bot will work but superadmin
-    commands will be silently ignored.
+    Returns empty frozenset if not set — superadmin commands will be silent.
     """
     raw = os.getenv("SUPERADMIN_IDS", "")
     return frozenset(
@@ -121,27 +126,29 @@ def load_config(ini_path: str = "config.ini") -> AppConfig:
         superadmin_ids=superadmin_ids,
         bot=BotConfig(
             max_history_messages=ini.getint("bot", "max_history_messages", fallback=20),
-            default_lang=ini.get("bot", "default_lang", fallback="en"),
+            default_lang=ini.get(          "bot", "default_lang",         fallback="en"),
         ),
         defaults=DefaultChatConfig(
-            toxicity_level=ini.getint(    "defaults", "toxicity_level",     fallback=3),
-            freq_min=ini.getint(          "defaults", "freq_min",            fallback=5),
-            freq_max=ini.getint(          "defaults", "freq_max",            fallback=15),
+            toxicity_level=    ini.getint("defaults", "toxicity_level",     fallback=3),
+            freq_min=          ini.getint("defaults", "freq_min",            fallback=5),
+            freq_max=          ini.getint("defaults", "freq_max",            fallback=15),
             reply_cooldown_sec=ini.getint("defaults", "reply_cooldown_sec",  fallback=60),
-            reply_chain_depth=ini.getint( "defaults", "reply_chain_depth",   fallback=5),
-            min_words=ini.getint(         "defaults", "min_words",           fallback=5),
+            reply_chain_depth= ini.getint("defaults", "reply_chain_depth",   fallback=5),
+            min_words=         ini.getint("defaults", "min_words",           fallback=5),
         ),
         groq=GroqConfig(
-            model=ini.get(           "groq", "model",       fallback="moonshotai/kimi-k2-instruct-0905"),
-            temperature=ini.getfloat("groq", "temperature", fallback=0.85),
-            max_tokens=ini.getint(   "groq", "max_tokens",  fallback=1024),
-            top_p=ini.getfloat(      "groq", "top_p",       fallback=0.95),
+            model=        ini.get(      "groq", "model",         fallback="moonshotai/kimi-k2-instruct-0905"),
+            vision_model= ini.get(      "groq", "vision_model",  fallback="meta-llama/llama-4-scout-17b-16e-instruct"),
+            whisper_model=ini.get(      "groq", "whisper_model", fallback="whisper-large-v3-turbo"),
+            temperature=  ini.getfloat( "groq", "temperature",   fallback=0.85),
+            max_tokens=   ini.getint(   "groq", "max_tokens",    fallback=1024),
+            top_p=        ini.getfloat( "groq", "top_p",         fallback=0.95),
             api_key=groq_api_key,
             base_url=_cf_groq_url(cf_account_id, cf_gateway_id),
         ),
         summarizer=SummarizerConfig(
-            model=ini.get(           "summarizer", "model",       fallback="llama-3.3-70b-versatile"),
-            max_tokens=ini.getint(   "summarizer", "max_tokens",  fallback=512),
+            model=      ini.get(     "summarizer", "model",       fallback="llama-3.3-70b-versatile"),
+            max_tokens= ini.getint(  "summarizer", "max_tokens",  fallback=512),
             temperature=ini.getfloat("summarizer", "temperature", fallback=0.3),
         ),
     )

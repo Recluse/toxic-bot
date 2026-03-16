@@ -6,6 +6,8 @@ Actions:
     - List users → select one → Reset or View summary
 """
 
+import re
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
@@ -15,10 +17,20 @@ import db.history as history_db
 import db.user_profiles as profiles_db
 from i18n import get_text
 from utils.rate_limiter import reset_chat as rl_reset_chat
+from utils.tg_safe import safe_edit
 from handlers.admin_menu.callbacks import (
     MENU_MAIN, RESET_CHAT, RESET_CHAT_CONFIRM,
     RESET_USER, VIEW_SUMMARY,
 )
+
+
+def _strip_tags(text: str) -> str:
+    """
+    Remove HTML tags from text.
+    Used for callback_query.answer() which renders plain text only —
+    tags passed to it appear as literal characters in the popup.
+    """
+    return re.sub(r"<[^>]+>", "", text).strip()
 
 
 async def show_user_mgmt_menu(
@@ -53,7 +65,7 @@ async def show_user_mgmt_menu(
             )
         ])
     else:
-        for user in users[:10]:   # cap at 10 to avoid oversized keyboards
+        for user in users[:10]:
             display = f"@{user['username']}" if user["username"] else f"id:{user['user_id']}"
             rows.append([
                 InlineKeyboardButton(
@@ -70,10 +82,10 @@ async def show_user_mgmt_menu(
         InlineKeyboardButton(get_text("menu_back", lang), callback_data=MENU_MAIN)
     ])
 
-    await update.callback_query.edit_message_text(
+    await safe_edit(
+        update,
         get_text("user_mgmt_title", lang),
-        reply_markup=InlineKeyboardMarkup(rows),
-        parse_mode=ParseMode.HTML,
+        InlineKeyboardMarkup(rows),
     )
 
 
@@ -88,11 +100,9 @@ async def handle_reset_chat(
     The confirmation button sends RESET_CHAT_CONFIRM.
     """
     await update.callback_query.answer(
-        get_text("reset_chat_prompt", lang),
+        _strip_tags(get_text("reset_chat_prompt", lang)),
         show_alert=True,
     )
-    # Edit keyboard to show explicit confirm button
-    chat_id = update.effective_chat.id
     await update.callback_query.edit_message_reply_markup(
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton(
@@ -117,10 +127,10 @@ async def handle_reset_chat_confirm(
     chat_id = update.effective_chat.id
     await history_db.delete_for_chat(chat_id)
     await profiles_db.delete_for_chat(chat_id)
-    rl_reset_chat(chat_id)  # clear in-memory cooldown entries too
+    rl_reset_chat(chat_id)
 
     await update.callback_query.answer(
-        get_text("reset_chat_confirm", lang), show_alert=False
+        _strip_tags(get_text("reset_chat_confirm", lang)), show_alert=False
     )
     await show_user_mgmt_menu(update, context, settings, lang)
 
@@ -142,7 +152,7 @@ async def handle_reset_user(
     await profiles_db.delete_for_user(chat_id, user_id)
 
     await update.callback_query.answer(
-        get_text("reset_user_done", lang, username=username),
+        _strip_tags(get_text("reset_user_done", lang, username=username)),
         show_alert=False,
     )
     await show_user_mgmt_menu(update, context, settings, lang)
@@ -155,7 +165,11 @@ async def handle_view_summary(
     settings: dict,
     lang: str,
 ) -> None:
-    """Display a user's stored psychological profile summary."""
+    """
+    Display a user's stored psychological profile summary.
+    callback_query.answer() renders plain text only — strip HTML tags
+    before passing the summary text to avoid literal <b> appearing in popup.
+    """
     chat_id = update.effective_chat.id
 
     profile  = await profiles_db.get_or_create(chat_id, user_id)
@@ -167,5 +181,5 @@ async def handle_view_summary(
     else:
         text = get_text("view_summary", lang, username=username, summary=summary)
 
-    # Show summary as a new alert — keeps the menu intact underneath
-    await update.callback_query.answer(text[:200], show_alert=True)
+    # answer() is plain text only — strip any HTML before sending
+    await update.callback_query.answer(_strip_tags(text)[:200], show_alert=True)

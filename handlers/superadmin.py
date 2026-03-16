@@ -2,13 +2,14 @@
 handlers/superadmin.py — Superadmin-only commands.
 
 Commands (PM only):
-    /sa_chats     — list all active chats with IDs and join dates
+    /sa_chats     — list all active chats with IDs, @usernames and join dates
     /sa_stats     — aggregate statistics
     /sa_broadcast — broadcast a message to all active group chats (conversation)
     /cancel       — abort an in-progress broadcast
 """
 
 import logging
+
 from telegram import Update
 from telegram.ext import (
     ContextTypes,
@@ -23,7 +24,6 @@ from db.chats import list_chats, get_stats
 
 logger = logging.getLogger(__name__)
 
-# ConversationHandler state
 WAITING_BROADCAST_TEXT = 1
 
 _CHAT_TYPE_LABEL = {
@@ -41,7 +41,7 @@ def _is_superadmin(user_id: int) -> bool:
 # --- /sa_chats ---
 
 async def cmd_sa_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List all active chats the bot is currently a member of."""
+    """List all active chats with ID, @username, and join date."""
     if not _is_superadmin(update.effective_user.id):
         return
 
@@ -52,10 +52,11 @@ async def cmd_sa_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     lines = [f"Active chats: {len(chats)}\n"]
     for c in chats:
-        label = _CHAT_TYPE_LABEL.get(c["chat_type"], "?")
-        joined = c["joined_at"].strftime("%Y-%m-%d") if c.get("joined_at") else "?"
+        label    = _CHAT_TYPE_LABEL.get(c["chat_type"], "?")
+        handle   = f"@{c['username']}" if c.get("username") else "(no username)"
+        joined   = c["joined_at"].strftime("%Y-%m-%d") if c.get("joined_at") else "?"
         lines.append(
-            f"[{label}] {c['title'] or '(no title)'}\n"
+            f"[{label}] {c['title'] or '(no title)'}  {handle}\n"
             f"    id: {c['chat_id']}  joined: {joined}"
         )
 
@@ -79,7 +80,7 @@ async def cmd_sa_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"Total ever:     {stats['total']}",
     ]
 
-    if stats["by_type"]:
+    if stats.get("by_type"):
         lines.append("\nActive by type:")
         for chat_type, count in stats["by_type"].items():
             lines.append(f"  {chat_type}: {count}")
@@ -88,7 +89,7 @@ async def cmd_sa_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     logger.info("Superadmin %s requested stats", update.effective_user.id)
 
 
-# --- /sa_broadcast (ConversationHandler) ---
+# --- /sa_broadcast ---
 
 async def cmd_sa_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Entry point: ask superadmin for the broadcast message."""
@@ -104,29 +105,24 @@ async def cmd_sa_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def _do_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive broadcast text and send it to all active group/supergroup chats."""
-    chats = await list_chats(active_only=True)
+    chats   = await list_chats(active_only=True)
     targets = [c for c in chats if c["chat_type"] in ("group", "supergroup")]
 
     if not targets:
         await update.message.reply_text("No active group chats to broadcast to.")
         return ConversationHandler.END
 
-    sent = 0
-    failed = 0
+    sent = failed = 0
     for c in targets:
         try:
-            await context.bot.send_message(
-                chat_id=c["chat_id"],
-                text=update.message.text,
-            )
+            await context.bot.send_message(chat_id=c["chat_id"], text=update.message.text)
             sent += 1
         except Exception as exc:
-            logger.warning("Broadcast failed for chat %s: %s", c["chat_id"], exc)
+            logger.warning("Broadcast failed chat_id=%s: %s", c["chat_id"], exc)
             failed += 1
 
     await update.message.reply_text(
-        f"Broadcast complete.\n"
-        f"Sent: {sent}  Failed: {failed}"
+        f"Broadcast complete.\nSent: {sent}  Failed: {failed}"
     )
     logger.info(
         "Superadmin %s broadcast — sent=%d failed=%d",
@@ -136,12 +132,10 @@ async def _do_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 async def _cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancel an in-progress broadcast."""
     await update.message.reply_text("Broadcast cancelled.")
     return ConversationHandler.END
 
 
-# Exported and registered in bot.py as a ConversationHandler
 broadcast_conversation = ConversationHandler(
     entry_points=[
         CommandHandler(
@@ -156,6 +150,5 @@ broadcast_conversation = ConversationHandler(
         ],
     },
     fallbacks=[CommandHandler("cancel", _cancel_broadcast)],
-    # Auto-cancel if superadmin goes silent for 2 minutes
     conversation_timeout=120,
 )

@@ -65,6 +65,7 @@ _COMMANDS_PUBLIC = {
         {"command": "help",          "description": "Full manual in DMs, short version in groups"},
         {"command": "about",         "description": "Current personality settings for this chat"},
         {"command": "reset",         "description": "Erase your conversation history with me"},
+        {"command": "explain",       "description": "Reply to a message: analyse it without toxicity"},
         {"command": "toxicity_demo", "description": "Watch me dismantle someone five different ways"},
         {"command": "toxic",         "description": "Admins: force a reply to a message — use as a reply"},
         {"command": "settings",      "description": "Admins: open settings menu"},
@@ -74,6 +75,7 @@ _COMMANDS_PUBLIC = {
         {"command": "help",          "description": "Полное руководство в личке, краткое в группе"},
         {"command": "about",         "description": "Текущие настройки личности для этого чата"},
         {"command": "reset",         "description": "Удалить свою историю разговора со мной"},
+        {"command": "explain",       "description": "Реплай на сообщение — разобрать без токсичности"},
         {"command": "toxicity_demo", "description": "Пять уровней презрения на одном примере"},
         {"command": "toxic",         "description": "Админы: натравить бота на сообщение реплаем"},
         {"command": "settings",      "description": "Админы: открыть меню настроек"},
@@ -83,6 +85,7 @@ _COMMANDS_PUBLIC = {
         {"command": "help",          "description": "Повний посібник в особистих, коротко в групі"},
         {"command": "about",         "description": "Поточні налаштування особистості для цього чату"},
         {"command": "reset",         "description": "Видалити свою історію розмови зі мною"},
+        {"command": "explain",       "description": "Реплай на повідомлення — розібрати без токсичності"},
         {"command": "toxicity_demo", "description": "П'ять рівнів зневаги на одному прикладі"},
         {"command": "toxic",         "description": "Адміни: натравити бота на повідомлення реплаєм"},
         {"command": "settings",      "description": "Адміни: відкрити меню налаштувань"},
@@ -115,7 +118,6 @@ def main() -> None:
     superadmin_ids = _parse_superadmin_ids()
     base_url       = f"https://api.telegram.org/bot{bot_token}/setMyCommands"
 
-    # --- Global scopes ---
     global_setups = [
         ("all_private_chats", None),
         ("all_private_chats", "en"),
@@ -132,14 +134,13 @@ def main() -> None:
         body = {"commands": cmds, "scope": {"type": scope_type}}
         if lang:
             body["language_code"] = lang
-        label = lang or "default"
+        label  = lang or "default"
         status = _post(base_url, body)
         print(f"scope={scope_type:<20} lang={label:<8} {status}")
 
-    # --- Per-superadmin scopes (PM only — full command list including sa_*) ---
     for uid in superadmin_ids:
         for lang in (None, "en", "ru", "uk"):
-            key = lang or "en"
+            key  = lang or "en"
             cmds = _COMMANDS_PUBLIC[key] + _COMMANDS_SUPERADMIN[key]
             body = {
                 "commands": cmds,
@@ -147,11 +148,10 @@ def main() -> None:
             }
             if lang:
                 body["language_code"] = lang
-            label = lang or "default"
+            label  = lang or "default"
             status = _post(base_url, body)
             print(f"scope=chat uid={uid:<12} lang={label:<8} {status}")
 
-    # Mark as done in .env
     set_key(ENV_PATH, ENV_FLAG, "1")
     print(f"\nAll done. {ENV_FLAG}=1 written to {ENV_PATH}")
     print("To re-run: python setup_commands.py --force")

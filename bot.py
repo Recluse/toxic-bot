@@ -11,6 +11,7 @@ Responsibilities:
 """
 
 import logging
+
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -34,6 +35,7 @@ from handlers.commands_public import (
     cmd_toxicity_demo,
     cmd_toxic,
 )
+from handlers.commands_explain import cmd_explain
 from handlers.messages import handle_message
 from handlers.admin_menu.router import route_callback
 from handlers.lifecycle import handle_my_chat_member
@@ -49,7 +51,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Suppress httpx/httpcore polling noise — every getUpdates call logs at INFO
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -62,8 +63,10 @@ async def _on_startup(application: Application) -> None:
     await init_pool()
     await run_migrations()
     logger.info(
-        "Bot started — model=%s gateway=%s superadmins=%s",
+        "Bot started — model=%s vision=%s whisper=%s gateway=%s superadmins=%s",
         config.groq.model,
+        config.groq.vision_model,
+        config.groq.whisper_model,
         config.groq.base_url,
         list(config.superadmin_ids),
     )
@@ -78,8 +81,7 @@ async def _on_shutdown(application: Application) -> None:
 async def _error_handler(update: object, context) -> None:
     """
     Global error handler — catches all unhandled exceptions from any handler.
-    Prevents the default PTB behaviour of dumping a raw traceback to stderr
-    with no context about which update caused it.
+    Prevents silent crashes and missing tracebacks in logs.
     """
     logger.error(
         "Unhandled exception processing update: %s",
@@ -100,13 +102,10 @@ def _add_settings_command(app: Application) -> None:
     from telegram.constants import ChatType
 
     async def cmd_settings(update, context):
-        # Block in private chats — settings are group-only
         if update.effective_chat.type == ChatType.PRIVATE:
             await update.message.reply_text(get_text("group_only", "en"))
             return
 
-        # Silently delete the command if caller is not an admin —
-        # same pattern as /toxic to avoid noisy "admin only" messages
         if not await is_chat_admin(update):
             try:
                 await update.message.delete()
@@ -130,7 +129,6 @@ def main() -> None:
         .build()
     )
 
-    # --- Global error handler — must be registered before any other handler ---
     app.add_error_handler(_error_handler)
 
     # --- Track bot membership changes in all chats ---
@@ -140,8 +138,8 @@ def main() -> None:
 
     # --- Superadmin commands (PM only) ---
     app.add_handler(broadcast_conversation)
-    app.add_handler(CommandHandler("sa_chats", cmd_sa_chats, filters=filters.ChatType.PRIVATE))
-    app.add_handler(CommandHandler("sa_stats", cmd_sa_stats, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("sa_chats",    cmd_sa_chats,    filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("sa_stats",    cmd_sa_stats,    filters=filters.ChatType.PRIVATE))
 
     # --- Public commands ---
     app.add_handler(CommandHandler("start",         cmd_start))
@@ -150,17 +148,19 @@ def main() -> None:
     app.add_handler(CommandHandler("reset",         cmd_reset))
     app.add_handler(CommandHandler("toxicity_demo", cmd_toxicity_demo))
     app.add_handler(CommandHandler("toxic",         cmd_toxic))
+    app.add_handler(CommandHandler("explain",       cmd_explain))
 
-    # --- Admin settings menu command ---
+    # --- Admin settings menu ---
     _add_settings_command(app)
 
     # --- All inline keyboard callbacks routed through a single handler ---
     app.add_handler(CallbackQueryHandler(route_callback))
 
-    # --- Main message handler (groups + PMs) ---
+    # --- Main message handler — text, photos, voice, audio ---
     app.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
+            (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO)
+            & ~filters.COMMAND,
             handle_message,
         )
     )

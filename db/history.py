@@ -78,3 +78,17 @@ async def delete_for_user(chat_id: int, user_id: int) -> int:
         deleted, chat_id, user_id,
     )
     return deleted
+
+async def get_user_summary(chat_id: int, user_id: int) -> str | None:
+    """
+    Return the cached psychological/behavioural summary for a user in this chat.
+    Built externally (not yet implemented) and stored in user_summaries.
+    Returns None if no summary exists — get_system_prompt handles None gracefully.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT summary FROM user_summaries WHERE chat_id = $1 AND user_id = $2",
+            chat_id, user_id,
+        )
+    return row["summary"] if row else None

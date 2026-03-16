@@ -1,118 +1,123 @@
 """
-ai/responder.py — Assembles LLM context and executes the main chat completion.
+ai/responder.py — LLM reply pipeline for chat and explain modes.
 
-Flow:
-    1. Load recent message history for the chat from DB
-    2. Build system prompt (level + lang + user profile)
-    3. Call Groq via CF gateway
-    4. Persist both the user turn and the assistant reply to DB
-    5. Fire-and-forget summarizer update
-    6. Return reply text to the caller
+get_reply()  — the single entry point for all LLM calls.
+               Selects prompt, builds message list, saves to history.
 """
 
-import asyncio
 import logging
-from openai import AsyncOpenAI
 
-from ai.client import groq_client
-from ai.prompts import get_system_prompt
-from ai import summarizer
+from ai.client import chat_completion, vision_completion
+from ai.modes import BotMode
+from ai.prompts import get_system_prompt, get_explain_prompt
+from ai.vision import build_vision_message
 import db.history as history_db
-import db.user_profiles as profiles_db
-from config import config
 
 logger = logging.getLogger(__name__)
 
 
 async def get_reply(
-    chat_id: int,
-    user_id: int,
-    username: str | None,
-    user_text: str,
+    chat_id:        int,
+    user_id:        int,
+    username:       str,
+    user_text:      str,
     toxicity_level: int,
-    lang: str,
-    extra_context: list[dict] | None = None,
+    lang:           str,
+    extra_context:  list[dict] | None = None,
+    mode:           BotMode           = BotMode.CHAT,
+    image_base64:   str | None        = None,
 ) -> str:
     """
-    Generate a bot reply for user_text in the context of chat_id.
+    Build the full message list and call the appropriate Groq endpoint.
+
+    In CHAT mode:    toxic persona, uses history, saves reply to history.
+    In EXPLAIN mode: scientific pedant, no history read/write,
+                     vision model used when image_base64 is provided.
 
     Args:
-        chat_id:         Telegram chat ID.
-        user_id:         Telegram user ID of the message author.
-        username:        Telegram @username or display name (for logging / profile).
-        user_text:       The user's message text.
-        toxicity_level:  1–5 from chat_settings.
-        lang:            Chat language code: 'en' | 'ru' | 'ua'.
-        extra_context:   Optional list of {role, content} dicts from a reply chain,
-                         prepended before the recent DB history.
-
-    Returns:
-        The assistant reply string.
+        image_base64: Base64-encoded image string from ai.vision.
+                      When provided in EXPLAIN mode the vision model is used.
     """
-    # Fetch the stored user profile for personalised targeting
-    profile = await profiles_db.get_or_create(chat_id, user_id, username)
-    user_summary = profile.get("summary") or ""
-
-    # Build system prompt with level, language, and user context
-    system_prompt = get_system_prompt(
-        level=toxicity_level,
-        lang=lang,
-        user_summary=user_summary,
-    )
-
-    # Load recent DB history (oldest first, ready for LLM)
-    db_history = await history_db.get_recent(chat_id)
-
-    # Assemble full message list:
-    #   [system] + [reply chain context] + [db history] + [current user turn]
-    # Reply chain context (if any) is injected before the stored history
-    # so the model sees the thread being replied to as background, then
-    # the ongoing conversation, then the new message.
-    chain = extra_context or []
-    messages = (
-        [{"role": "system", "content": system_prompt}]
-        + chain
-        + db_history
-        + [{"role": "user", "content": user_text}]
-    )
-
-    logger.info(
-        "Calling Groq model=%s chat_id=%d user_id=%d level=%d lang=%s "
-        "history=%d chain=%d",
-        config.groq.model, chat_id, user_id,
-        toxicity_level, lang, len(db_history), len(chain),
-    )
-
-    response = await groq_client.chat.completions.create(
-        model=config.groq.model,
-        messages=messages,
-        temperature=config.groq.temperature,
-        max_tokens=config.groq.max_tokens,
-        top_p=config.groq.top_p,
-    )
-
-    reply_text = response.choices[0].message.content.strip()
-
-    logger.info(
-        "Groq reply received chat_id=%d tokens=%d",
-        chat_id,
-        response.usage.total_tokens if response.usage else -1,
-    )
-
-    # Persist conversation turns — both the incoming user message and the reply
-    await history_db.append(chat_id, user_id, "user",      user_text)
-    await history_db.append(chat_id, user_id, "assistant", reply_text)
-
-    # Update the user's profile summary asynchronously.
-    # We do not await this — it must never block the reply.
-    asyncio.create_task(
-        summarizer.update_profile(
+    if mode == BotMode.EXPLAIN:
+        return await _explain_reply(
             chat_id=chat_id,
             user_id=user_id,
             username=username,
-            new_message=user_text,
-            existing_summary=user_summary,
+            user_text=user_text,
+            lang=lang,
+            image_base64=image_base64,
         )
+
+    return await _chat_reply(
+        chat_id=chat_id,
+        user_id=user_id,
+        username=username,
+        user_text=user_text,
+        toxicity_level=toxicity_level,
+        lang=lang,
+        extra_context=extra_context or [],
     )
 
-    return reply_text
+
+async def _chat_reply(
+    chat_id:        int,
+    user_id:        int,
+    username:       str,
+    user_text:      str,
+    toxicity_level: int,
+    lang:           str,
+    extra_context:  list[dict],
+) -> str:
+    # Load recent history and optional user profile for context window
+    history       = await history_db.get_recent(chat_id)
+    user_summary  = await history_db.get_user_summary(chat_id, user_id)
+    system_prompt = get_system_prompt(toxicity_level, lang, user_summary)
+
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(history)
+    messages.extend(extra_context)
+    messages.append({"role": "user", "content": f"{username}: {user_text}"})
+
+    reply = await chat_completion(messages)
+
+    # Persist both sides of the exchange so future requests have context
+    await history_db.append(chat_id, user_id, "user",      f"{username}: {user_text}")
+    await history_db.append(chat_id, user_id, "assistant", reply)
+
+    return reply
+
+
+async def _explain_reply(
+    chat_id:      int,
+    user_id:      int,
+    username:     str,
+    user_text:    str,
+    lang:         str,
+    image_base64: str | None,
+) -> str:
+    # EXPLAIN mode is stateless — no history read or write
+    system_prompt = get_explain_prompt(lang)
+
+    if image_base64:
+        # Vision path: system message + multimodal user message
+        messages = [
+            {"role": "system", "content": system_prompt},
+            build_vision_message(
+                image_base64=image_base64,
+                prompt=(
+                    f"{user_text}\n\n"
+                    if user_text else
+                    "Analyse this image in detail. Identify all factual claims "
+                    "implied or visible, check for internal contradictions, "
+                    "and elaborate on the subject matter."
+                ),
+            ),
+        ]
+        return await vision_completion(messages)
+
+    # Text-only explain path
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user",   "content": user_text},
+    ]
+    return await chat_completion(messages)
