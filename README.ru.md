@@ -155,6 +155,8 @@ min_words = 5
 
 [groq]
 model = moonshotai/kimi-k2-instruct-0905  # или llama3-groq-70b-8192-tool-use-preview
+vision_model  = meta-llama/llama-4-scout-17b-16e-instruct
+whisper_model = whisper-large-v3-turbo
 temperature = 0.85
 max_tokens = 1024
 top_p = 0.95
