@@ -89,6 +89,7 @@ async def handle_message(
     # --- Extract text from different message types ---
     text:         str | None = None
     image_base64: str | None = None
+    photo_file_id: str | None = None
 
     if message.text:
         text = message.text.strip()
@@ -106,26 +107,12 @@ async def handle_message(
             return
 
     elif message.photo:
-        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        caption = message.caption or ""
-        try:
-            image_base64 = await get_image_base64(context.bot, message.photo[-1].file_id)
-            # Describe the image to get a text representation for the word count gate.
-            # The description is also used as user_text in get_reply.
-            desc_messages = [build_vision_message(
-                image_base64=image_base64,
-                prompt=caption or "Describe this image briefly in one sentence.",
-            )]
-            _description = await vision_completion(desc_messages)
-            # Wrap as user action so the LLM responds to the photo sender,
-            # not as if it's analyzing its own output
-            text = f"[user sent a photo: {_description}]"
-            logger.debug("Vision description chat_id=%d user_id=%d", chat_id, user_id)
-        except Exception as exc:
-            logger.error("Vision failed chat_id=%d: %s", chat_id, exc)
-            return
+        # Do not call the vision model unless we decide to reply.
+        # Determine word count from caption only (if any) for gating.
+        photo_file_id = message.photo[-1].file_id
+        text = (message.caption or "").strip()
 
-    if not text:
+    if not text and not photo_file_id:
         return
 
     # --- 1. Word count gate (skip in PM — PM always responds) ---
@@ -136,7 +123,7 @@ async def handle_message(
         "voice" if message.voice else "photo" if message.photo else "text",
     )
 
-    if not is_pm and word_count < min_words:
+    if not is_pm and word_count < min_words and not photo_file_id:
         logger.debug("Too short (%d < %d) — ignored chat_id=%d", word_count, min_words, chat_id)
         return
 
@@ -182,6 +169,21 @@ async def handle_message(
 
     # --- Fire the LLM call ---
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    # If the selected message is a photo, describe it now (post-frequency gating).
+    if photo_file_id:
+        try:
+            image_base64 = await get_image_base64(context.bot, photo_file_id)
+            desc_messages = [build_vision_message(
+                image_base64=image_base64,
+                prompt=(text or "Describe this image briefly in one sentence."),
+            )]
+            _description = await vision_completion(desc_messages)
+            text = f"[user sent a photo: {_description}]"
+            logger.debug("Vision description chat_id=%d user_id=%d", chat_id, user_id)
+        except Exception as exc:
+            logger.error("Vision failed chat_id=%d: %s", chat_id, exc)
+            return
 
     try:
         reply = await get_reply(
