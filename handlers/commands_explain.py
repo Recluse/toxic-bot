@@ -15,9 +15,13 @@ scientific pedant persona with peer-reviewed source references.
 """
 
 import logging
+import re
+
+import html
 
 from telegram import Update, ReplyParameters
 from telegram.constants import ParseMode, ChatAction, ChatType
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from ai.modes import BotMode
@@ -127,63 +131,231 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
-async def _send_explain_parts(bot, chat_id: int, text: str, reply_to: int) -> None:
-    """
-    Split long explain responses into multiple HTML-formatted messages.
-    Telegram limit: 4096 chars per message. Preserves formatting and threading.
-    """
-    # Split on double newlines (paragraphs) first, then characters if needed
-    paragraphs = text.split("\n\n")
-    current_part = ""
-    parts = []
+def _sanitize_telegram_html(text: str) -> str:
+    """Sanitize HTML output for Telegram's limited HTML subset.
 
-    for para in paragraphs:
-        # Test if paragraph fits in current part
-        test_part = current_part + (para + "\n\n" if current_part else para)
-        if len(test_part) <= 4000:  # margin for safety
-            current_part = test_part
-        else:
-            # Paragraph too long — split by single newlines, then chars
-            if len(para) > 4000:
-                # Single paragraph exceeds limit — split by sentences
-                sentences = para.split(". ")
-                subpart = ""
-                for sent in sentences:
-                    if len(subpart + sent + ". ") <= 4000:
-                        subpart += sent + ". "
+    Telegram supports only a small set of HTML tags. Some LLMs (and the user’s
+    prompt) may produce tags like <sup>/<sub> which are rejected.
+
+    This function:
+    - Converts <sup>...</sup> to ^... and <sub>...</sub> to _... to preserve
+      math-like notation.
+    - Removes any unsupported HTML tags while keeping their text content.
+    """
+
+    # Convert common math-style tags into text-friendly notations.
+    text = re.sub(r"<sup>(.*?)</sup>", lambda m: f"^{m.group(1)}", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<sub>(.*?)</sub>", lambda m: f"_{m.group(1)}", text, flags=re.IGNORECASE | re.DOTALL)
+
+    # Telegram supports only the following tags in HTML parse mode.
+    allowed = {"b", "i", "u", "s", "strong", "em", "code", "pre", "a"}
+
+    def _keep_tag(m: re.Match) -> str:
+        tag = m.group(1).lower()
+        if tag in allowed:
+            return m.group(0)
+        return ""
+
+    # Strip unsupported tags but keep their inner text unchanged.
+    return re.sub(r"</?([a-zA-Z0-9]+)(?:\s+[^>]*)?>", _keep_tag, text)
+
+
+def _repair_html_tags(text: str) -> str:
+    """Make HTML tags balanced so Telegram can parse them.
+
+    Telegram rejects messages with mismatched tags (e.g. <b>...</i>). This
+    tries to fix simple cases by ignoring a mismatched closing tag and by
+    automatically closing any remaining open tags at the end.
+
+    Supported tags are those that Telegram accepts (and a few we generate
+    ourselves): <b>, <i>, <u>, <s>, <strong>, <em>, <code>, <pre>, <a>.
+    """
+
+    supported_tags = {"b", "i", "u", "s", "strong", "em", "code", "pre", "a"}
+
+    tags: list[str] = []
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] == "<":
+            end = text.find(">", i + 1)
+            if end == -1:
+                out.append(text[i:])
+                break
+
+            tag = text[i + 1:end].strip()
+            is_closing = tag.startswith("/")
+            tag_name = tag[1:] if is_closing else tag
+            tag_name = tag_name.split()[0].lower()
+
+            if tag_name in supported_tags:
+                if is_closing:
+                    if tags and tags[-1] == tag_name:
+                        tags.pop()
+                        out.append(text[i:end + 1])
                     else:
-                        if subpart:
-                            parts.append(subpart.strip())
-                        subpart = sent + ". "
-                if subpart:
-                    current_part = subpart
+                        # Ignore mismatched closing tag (Telegram will reject it)
+                        pass
+                else:
+                    tags.append(tag_name)
+                    out.append(text[i:end + 1])
             else:
-                if current_part:
-                    parts.append(current_part.strip())
-                current_part = para + "\n\n"
+                # Drop unsupported tag entirely.
+                pass
 
-    if current_part:
-        parts.append(current_part.strip())
-
-    # Send parts sequentially with same reply_to threading
-    for i, part in enumerate(parts, 1):
-        if i == 1:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=part,
-                parse_mode=ParseMode.HTML,
-                reply_parameters=ReplyParameters(
-                    message_id=reply_to,
-                    chat_id=chat_id,
-                ),
-            )
+            i = end + 1
         else:
+            out.append(text[i])
+            i += 1
+
+    while tags:
+        out.append(f"</{tags.pop()}>")
+
+    return "".join(out)
+
+
+def _chunk_html_text(text: str, max_len: int = 3500) -> list[str]:
+    """Split HTML text into smaller chunks while respecting basic tag boundaries.
+
+    Telegram enforces a 4096-character limit on the final rendered message,
+    so we use a conservative max_len to allow for markup overhead and the
+    "Continued..." prefix.
+    """
+
+    parts: list[str] = []
+    remaining = text
+
+    while remaining:
+        if len(remaining) <= max_len:
+            parts.append(remaining)
+            break
+
+        # Prefer splitting at a '>' to avoid cutting inside an HTML tag.
+        chunk = remaining[:max_len]
+        cut = chunk.rfind(">")
+        if cut <= 0:
+            cut = max_len
+        else:
+            cut += 1
+
+        # Try to cut at a newline or space if available near the split point.
+        for sep in ("\n", " "):
+            sep_pos = remaining.rfind(sep, 0, cut)
+            if sep_pos != -1 and sep_pos > cut - 200:
+                cut = sep_pos + 1
+                break
+
+        # Ensure we are not splitting inside an HTML tag.
+        while True:
+            prefix = remaining[:cut]
+            if prefix.count("<") > prefix.count(">"):
+                next_gt = remaining.find(">", cut)
+                if next_gt == -1:
+                    cut = len(remaining)
+                    break
+                cut = next_gt + 1
+                continue
+            break
+
+        parts.append(remaining[:cut])
+        remaining = remaining[cut:]
+
+    return parts
+
+
+async def _send_explain_parts(bot, chat_id: int, text: str, reply_to: int) -> None:
+    """Split long explain responses into multiple HTML-formatted messages."""
+
+    # Sanitize LLM output for Telegram HTML parse mode.
+    sanitized = _sanitize_telegram_html(text)
+    repaired = _repair_html_tags(sanitized)
+
+    chunks = _chunk_html_text(repaired, max_len=3500)
+
+    for chunk in chunks:
+        try:
             await bot.send_message(
                 chat_id=chat_id,
-                text=f"<b>Continued...</b>\n\n{part}",
+                text=chunk,
                 parse_mode=ParseMode.HTML,
                 reply_parameters=ReplyParameters(
                     message_id=reply_to,
                     chat_id=chat_id,
                 ),
             )
+        except BadRequest as exc:
+            err = str(exc)
+            if "Can't parse entities" in err or "unsupported start tag" in err:
+                # Fallback to a safer format without HTML tags.
+                safe_text = html.escape(payload)
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=safe_text,
+                        reply_parameters=ReplyParameters(
+                            message_id=reply_to,
+                            chat_id=chat_id,
+                        ),
+                    )
+                except BadRequest as exc2:
+                    # If it is still too long, split further and retry.
+                    if "Message is too long" in str(exc2):
+                        smaller_chunks = _chunk_html_text(safe_text, max_len=3800)
+                        for sub in smaller_chunks:
+                            try:
+                                await bot.send_message(
+                                    chat_id=chat_id,
+                                    text=sub,
+                                    reply_parameters=ReplyParameters(
+                                        message_id=reply_to,
+                                        chat_id=chat_id,
+                                    ),
+                                )
+                            except BadRequest as exc3:
+                                if "Message is too long" in str(exc3):
+                                    # Last resort: hard-split by size until it fits.
+                                    hard_chunks = _chunk_html_text(sub, max_len=1500)
+                                    for hard in hard_chunks:
+                                        await bot.send_message(
+                                            chat_id=chat_id,
+                                            text=hard,
+                                            reply_parameters=ReplyParameters(
+                                                message_id=reply_to,
+                                                chat_id=chat_id,
+                                            ),
+                                        )
+                                else:
+                                    raise
+                    else:
+                        raise
+            elif "Message is too long" in err:
+                # Split the chunk smaller and resend.
+                smaller_chunks = _chunk_html_text(chunk, max_len=3800)
+                for sub in smaller_chunks:
+                    try:
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text=sub,
+                            parse_mode=ParseMode.HTML,
+                            reply_parameters=ReplyParameters(
+                                message_id=reply_to,
+                                chat_id=chat_id,
+                            ),
+                        )
+                    except BadRequest as exc3:
+                        if "Message is too long" in str(exc3):
+                            hard_chunks = _chunk_html_text(sub, max_len=1500)
+                            for hard in hard_chunks:
+                                await bot.send_message(
+                                    chat_id=chat_id,
+                                    text=hard,
+                                    parse_mode=ParseMode.HTML,
+                                    reply_parameters=ReplyParameters(
+                                        message_id=reply_to,
+                                        chat_id=chat_id,
+                                    ),
+                                )
+                        else:
+                            raise
+            else:
+                raise

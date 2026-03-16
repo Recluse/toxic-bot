@@ -35,7 +35,9 @@ def get_groq_client() -> AsyncOpenAI:
 
 async def chat_completion(messages: list[dict], **kwargs) -> str:
     """Call the standard chat completions endpoint."""
-    client   = get_groq_client()
+    client = get_groq_client()
+
+    logger.debug("chat_completion request: model=%s messages=%s", kwargs.get("model", config.groq.model), messages)
     response = await client.chat.completions.create(
         model=      kwargs.get("model",       config.groq.model),
         messages=   messages,
@@ -43,12 +45,16 @@ async def chat_completion(messages: list[dict], **kwargs) -> str:
         max_tokens= kwargs.get("max_tokens",  config.groq.max_tokens),
         top_p=      kwargs.get("top_p",       config.groq.top_p),
     )
-    return response.choices[0].message.content
+    reply = response.choices[0].message.content
+    logger.debug("chat_completion response: %s", reply)
+    return reply
 
 
 async def vision_completion(messages: list[dict], **kwargs) -> str:
     """Call the vision-capable model (Llama 4 Scout)."""
-    client   = get_groq_client()
+    client = get_groq_client()
+
+    logger.debug("vision_completion request: model=%s messages=%s", config.groq.vision_model, messages)
     response = await client.chat.completions.create(
         model=      config.groq.vision_model,
         messages=   messages,
@@ -56,7 +62,9 @@ async def vision_completion(messages: list[dict], **kwargs) -> str:
         max_tokens= kwargs.get("max_tokens",  config.groq.max_tokens),
         top_p=      kwargs.get("top_p",       config.groq.top_p),
     )
-    return response.choices[0].message.content
+    reply = response.choices[0].message.content
+    logger.debug("vision_completion response: %s", reply)
+    return reply
 
 
 groq_client: AsyncOpenAI = get_groq_client()

@@ -120,4 +120,8 @@ async def _explain_reply(
         {"role": "system", "content": system_prompt},
         {"role": "user",   "content": user_text},
     ]
-    return await chat_completion(messages)
+
+    # EXPLAIN mode often needs more tokens than normal chat replies,
+    # because it produces long, structured analysis.
+    # Increase the max token budget so longer explanations can be generated.
+    return await chat_completion(messages, max_tokens=4096)

@@ -7,6 +7,8 @@ Add new migrations at the END of _MIGRATIONS — never reorder existing ones.
 
 import logging
 
+import asyncpg
+
 from db.pool import get_pool
 
 logger = logging.getLogger(__name__)
@@ -27,7 +29,7 @@ _MIGRATIONS = [
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS history (
+    CREATE TABLE IF NOT EXISTS message_history (
         id         BIGSERIAL PRIMARY KEY,
         chat_id    BIGINT NOT NULL,
         role       TEXT   NOT NULL,
@@ -36,7 +38,23 @@ _MIGRATIONS = [
     )
     """,
     """
-    CREATE INDEX IF NOT EXISTS history_chat_id_idx ON history (chat_id, created_at DESC)
+    ALTER TABLE message_history
+        ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    """,
+    """
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+          SELECT 1
+            FROM pg_class
+           WHERE relkind = 'i'
+             AND relname = 'message_history_chat_id_idx'
+      ) THEN
+          CREATE INDEX message_history_chat_id_idx
+            ON message_history (chat_id, created_at DESC);
+      END IF;
+    END
+    $$;
     """,
     """
     CREATE TABLE IF NOT EXISTS chats (
@@ -61,6 +79,38 @@ _MIGRATIONS = [
     """
     ALTER TABLE chats ADD COLUMN IF NOT EXISTS username TEXT
     """,
+    # 004 — auto-migrate old history table name to message_history
+    """
+    DO $$
+    BEGIN
+      -- If an old schema used table `history`, rename it to `message_history`.
+      -- This is safe to run multiple times and preserves existing data.
+      IF EXISTS (
+          SELECT 1
+            FROM information_schema.tables
+           WHERE table_schema = 'public'
+             AND table_name = 'history'
+      ) AND NOT EXISTS (
+          SELECT 1
+            FROM information_schema.tables
+           WHERE table_schema = 'public'
+             AND table_name = 'message_history'
+      ) THEN
+          ALTER TABLE history RENAME TO message_history;
+      END IF;
+
+      -- If the old index exists, rename it to match the new table name.
+      IF EXISTS (
+          SELECT 1
+            FROM pg_class
+           WHERE relkind = 'i'
+             AND relname = 'history_chat_id_idx'
+      ) THEN
+          ALTER INDEX history_chat_id_idx RENAME TO message_history_chat_id_idx;
+      END IF;
+    END
+    $$;
+    """,
 ]
 
 
@@ -68,5 +118,11 @@ async def run_migrations() -> None:
     pool = get_pool()
     async with pool.acquire() as conn:
         for sql in _MIGRATIONS:
-            await conn.execute(sql)
+            try:
+                await conn.execute(sql)
+            except asyncpg.exceptions.DuplicateTableError:
+                # Some DDL may still attempt to create an object that already exists
+                # due to subtle differences in PG versions or search_path.
+                # This is safe to ignore in a migration runner.
+                logger.debug("Ignored DuplicateTableError during migration")
     logger.info("Migrations complete (%d statements)", len(_MIGRATIONS))
