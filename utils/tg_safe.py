@@ -12,6 +12,35 @@ from telegram.error import BadRequest, RetryAfter
 logger = logging.getLogger(__name__)
 
 
+async def delete_after_delay(bot, chat_id: int, message_id: int, delay_sec: int = 30) -> None:
+    """Delete a message after a short delay. Best-effort helper."""
+    await asyncio.sleep(delay_sec)
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        # Message may already be deleted or no longer deletable.
+        pass
+
+
+async def send_ephemeral_text(
+    context,
+    chat_id: int,
+    text: str,
+    reply_to_message_id: int | None = None,
+    delay_sec: int = 30,
+) -> None:
+    """Send an informational message and schedule auto-delete."""
+    sent = await context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_to_message_id=reply_to_message_id,
+    )
+
+    context.application.create_task(
+        delete_after_delay(context.bot, chat_id, sent.message_id, delay_sec=delay_sec)
+    )
+
+
 async def safe_edit(
     update: Update,
     text: str,

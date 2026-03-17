@@ -88,4 +88,85 @@ async def get_stats() -> dict:
         """,
     )
     totals["by_type"] = {r["chat_type"]: r["cnt"] for r in type_rows}
+
+    has_history_user_id = bool(await pool.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1
+              FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'message_history'
+               AND column_name = 'user_id'
+        )
+        """
+    ))
+
+    has_user_summaries = bool(await pool.fetchval(
+        "SELECT to_regclass('public.user_summaries') IS NOT NULL"
+    ))
+    has_user_profiles = bool(await pool.fetchval(
+        "SELECT to_regclass('public.user_profiles') IS NOT NULL"
+    ))
+
+    users_in_history = 0
+    if has_history_user_id:
+        users_in_history = int(await pool.fetchval(
+            """
+            SELECT COUNT(DISTINCT user_id)
+              FROM message_history
+             WHERE user_id IS NOT NULL
+            """
+        ) or 0)
+
+    if has_user_summaries:
+        users_in_profiles = int(await pool.fetchval(
+            "SELECT COUNT(DISTINCT user_id) FROM user_summaries"
+        ) or 0)
+    elif has_user_profiles:
+        users_in_profiles = int(await pool.fetchval(
+            "SELECT COUNT(DISTINCT user_id) FROM user_profiles"
+        ) or 0)
+    else:
+        users_in_profiles = 0
+
+    history_rows = int(await pool.fetchval("SELECT COUNT(*) FROM message_history") or 0)
+    totals["users_in_history"] = users_in_history
+    totals["users_in_profiles"] = users_in_profiles
+    totals["history_rows"] = history_rows
+
+    sizes = await pool.fetchrow(
+        """
+        SELECT
+            pg_database_size(current_database()) AS db_total_bytes,
+            CASE WHEN to_regclass('public.message_history') IS NULL
+                 THEN 0
+                 ELSE pg_total_relation_size(to_regclass('public.message_history'))
+            END AS message_history_bytes,
+            CASE
+                WHEN to_regclass('public.user_summaries') IS NOT NULL
+                    THEN pg_total_relation_size(to_regclass('public.user_summaries'))
+                WHEN to_regclass('public.user_profiles') IS NOT NULL
+                    THEN pg_total_relation_size(to_regclass('public.user_profiles'))
+                ELSE 0
+            END AS user_summaries_bytes,
+            CASE WHEN to_regclass('public.chats') IS NULL
+                 THEN 0
+                 ELSE pg_total_relation_size(to_regclass('public.chats'))
+            END AS chats_bytes,
+            CASE WHEN to_regclass('public.bot_metrics') IS NULL
+                 THEN 0
+                 ELSE pg_total_relation_size(to_regclass('public.bot_metrics'))
+            END AS bot_metrics_bytes,
+            CASE WHEN to_regclass('public.untouchable_users') IS NULL
+                 THEN 0
+                 ELSE pg_total_relation_size(to_regclass('public.untouchable_users'))
+            END AS untouchable_users_bytes
+        """
+    )
+    totals["db_total_bytes"] = int(sizes["db_total_bytes"] or 0)
+    totals["message_history_bytes"] = int(sizes["message_history_bytes"] or 0)
+    totals["user_summaries_bytes"] = int(sizes["user_summaries_bytes"] or 0)
+    totals["chats_bytes"] = int(sizes["chats_bytes"] or 0)
+    totals["bot_metrics_bytes"] = int(sizes["bot_metrics_bytes"] or 0)
+    totals["untouchable_users_bytes"] = int(sizes["untouchable_users_bytes"] or 0)
     return totals

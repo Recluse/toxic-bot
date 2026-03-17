@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 _client: AsyncOpenAI | None = None
 
 
+def _is_over_capacity_error(exc: Exception) -> bool:
+    """Detect Groq over-capacity errors for fallback routing."""
+    status = getattr(exc, "status_code", None)
+    msg = str(exc).lower()
+    return status == 503 or "over capacity" in msg
+
+
 def get_groq_client() -> AsyncOpenAI:
     """Return the shared AsyncOpenAI instance pointed at Groq, creating on first call."""
     global _client
@@ -37,14 +44,38 @@ async def chat_completion(messages: list[dict], **kwargs) -> str:
     """Call the standard chat completions endpoint."""
     client = get_groq_client()
 
-    logger.debug("chat_completion request: model=%s messages=%s", kwargs.get("model", config.groq.model), messages)
-    response = await client.chat.completions.create(
-        model=      kwargs.get("model",       config.groq.model),
-        messages=   messages,
-        temperature=kwargs.get("temperature", config.groq.temperature),
-        max_tokens= kwargs.get("max_tokens",  config.groq.max_tokens),
-        top_p=      kwargs.get("top_p",       config.groq.top_p),
-    )
+    model = kwargs.get("model", config.groq.model)
+    temperature = kwargs.get("temperature", config.groq.temperature)
+    max_tokens = kwargs.get("max_tokens", config.groq.max_tokens)
+    top_p = kwargs.get("top_p", config.groq.top_p)
+
+    logger.debug("chat_completion request: model=%s messages=%s", model, messages)
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+        )
+    except Exception as exc:
+        fallback_model = config.groq.fallback_model
+        if _is_over_capacity_error(exc) and model != fallback_model:
+            logger.warning(
+                "Primary model over capacity (%s). Falling back to %s",
+                model,
+                fallback_model,
+            )
+            response = await client.chat.completions.create(
+                model=fallback_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+            )
+        else:
+            raise
+
     reply = response.choices[0].message.content
     logger.debug("chat_completion response: %s", reply)
     return reply

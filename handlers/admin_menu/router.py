@@ -43,6 +43,15 @@ from handlers.admin_menu.untouchables_menu import (
     show_untouchables_menu,
     handle_untouchable_remove,
 )
+from handlers.pm_settings import (
+    send_pm_settings_menu,
+    show_pm_toxicity_menu,
+    handle_pm_set_toxicity,
+    handle_pm_toggle_global_untouchable,
+    handle_pm_show_dossier,
+    handle_pm_reset_me_prompt,
+    handle_pm_reset_me_confirm,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +83,48 @@ async def route_callback(
     if data == "noop":
         await query.answer()
         return
+
+    # --- Private settings callbacks (no admin check) ---
+    if data.startswith(CB.PREFIX_PM):
+        settings = await settings_db.get_or_create(chat_id)
+        lang = settings["lang"]
+
+        if data == CB.PM_MENU_MAIN:
+            await query.answer()
+            await send_pm_settings_menu(update, context, lang, edit=True)
+            return
+
+        if data == CB.PM_MENU_TOXICITY:
+            await query.answer()
+            await show_pm_toxicity_menu(update, context, settings, lang)
+            return
+
+        if data.startswith(CB.PREFIX_PM_SET_TOXICITY):
+            level = int(data.replace(CB.PREFIX_PM_SET_TOXICITY, ""))
+            await handle_pm_set_toxicity(update, context, level, settings, lang)
+            return
+
+        if data == CB.PM_TOGGLE_GLOBAL_UNTOUCHABLE:
+            await handle_pm_toggle_global_untouchable(update, context, lang)
+            return
+
+        if data == CB.PM_MY_DOSSIER:
+            await handle_pm_show_dossier(update, context, lang)
+            return
+
+        if data == CB.PM_RESET_ME:
+            await query.answer()
+            await handle_pm_reset_me_prompt(update, context, lang)
+            return
+
+        if data == CB.PM_RESET_ME_CONFIRM:
+            await handle_pm_reset_me_confirm(update, context, lang)
+            return
+
+        if data == CB.PM_EXIT:
+            await query.answer()
+            await query.message.delete()
+            return
 
     # --- Admin check for everything else ---
     if not await is_chat_admin(update):

@@ -10,6 +10,7 @@ keyboard message is deleted after confirmation.
 
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 import db.chat_settings as settings_db
@@ -86,4 +87,11 @@ async def handle_lang_callback(
 
     # Edit the keyboard message to a plain confirmation text
     confirmation = get_text("lang_set", lang)
-    await query.edit_message_text(confirmation)
+    try:
+        await query.edit_message_text(confirmation)
+    except BadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            # User tapped the same language again; this is harmless.
+            await query.answer()
+            return
+        raise

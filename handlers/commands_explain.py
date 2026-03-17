@@ -29,8 +29,10 @@ from ai.responder import get_reply
 from ai.transcriber import transcribe
 from ai.vision import get_image_base64
 import db.chat_settings as settings_db
+import db.metrics as metrics_db
 from i18n import get_text
-from utils.rate_limiter import check_and_set_explain
+from utils.rate_limiter import check_and_set_explain, check_pm_explain_quota, check_pm_media_quota
+from utils.tg_safe import send_ephemeral_text
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +50,22 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     lang        = settings["lang"]
     is_pm       = chat.type == ChatType.PRIVATE
 
+    await metrics_db.increment("explain_requests")
+
     if not is_pm:
         explain_cd_min = int(settings.get("explain_cooldown_min", 10))
         if not check_and_set_explain(chat.id, user.id, explain_cd_min * 60):
-            await message.reply_text(get_text("explain_cooldown_active", lang, minutes=explain_cd_min))
+            await send_ephemeral_text(
+                context,
+                chat_id=chat.id,
+                text=get_text("explain_cooldown_active", lang, minutes=explain_cd_min),
+                reply_to_message_id=message.message_id,
+                delay_sec=30,
+            )
+            return
+    else:
+        if not check_pm_explain_quota(chat.id, user.id):
+            await message.reply_text(get_text("pm_explain_hour_limit", lang))
             return
 
     # Text typed inline after the command: "/explain ядерная физика"
@@ -83,6 +97,10 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     image_base64: str | None = None
 
     if target.voice or target.audio:
+        if is_pm and not check_pm_media_quota(chat.id, user.id):
+            await message.reply_text(get_text("pm_media_hour_limit", lang))
+            return
+
         await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
         file_id      = (target.voice or target.audio).file_id
         is_voice     = target.voice is not None
@@ -94,6 +112,10 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
 
     elif target.photo:
+        if is_pm and not check_pm_media_quota(chat.id, user.id):
+            await message.reply_text(get_text("pm_media_hour_limit", lang))
+            return
+
         await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
         image_base64 = await get_image_base64(context.bot, target.photo[-1].file_id)
         logger.debug("explain: downloaded image chat_id=%d", chat.id)
@@ -301,7 +323,7 @@ async def _send_explain_parts(bot, chat_id: int, text: str, reply_to: int) -> No
             err = str(exc)
             if "Can't parse entities" in err or "unsupported start tag" in err:
                 # Fallback to a safer format without HTML tags.
-                safe_text = html.escape(payload)
+                safe_text = html.escape(chunk)
                 try:
                     await bot.send_message(
                         chat_id=chat_id,

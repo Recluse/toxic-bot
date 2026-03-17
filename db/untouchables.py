@@ -92,3 +92,54 @@ async def delete_for_chat(chat_id: int) -> int:
             chat_id,
         )
     return int(result.split()[-1])
+
+
+async def add_global(user_id: int, username: str | None = None) -> bool:
+    """Mark user as globally untouchable across all chats."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO global_untouchables (user_id, username)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id)
+            DO UPDATE SET username = COALESCE(EXCLUDED.username, global_untouchables.username)
+            RETURNING (xmax = 0) AS inserted
+            """,
+            user_id,
+            username,
+        )
+    return bool(row["inserted"]) if row else False
+
+
+async def remove_global(user_id: int) -> int:
+    """Unmark globally untouchable user."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM global_untouchables WHERE user_id = $1",
+            user_id,
+        )
+    return int(result.split()[-1])
+
+
+async def is_globally_protected(user_id: int) -> bool:
+    """Return True if user is globally untouchable."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM global_untouchables WHERE user_id = $1 LIMIT 1",
+            user_id,
+        )
+    return row is not None
+
+
+async def delete_everywhere_for_user(user_id: int) -> int:
+    """Delete all per-chat untouchable entries for a user."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM untouchable_users WHERE user_id = $1",
+            user_id,
+        )
+    return int(result.split()[-1])

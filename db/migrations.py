@@ -165,6 +165,21 @@ _MIGRATIONS = [
     END
     $$;
     """,
+    # 006 — global untouchable users (all chats)
+    """
+    CREATE TABLE IF NOT EXISTS global_untouchables (
+      user_id     BIGINT PRIMARY KEY,
+      username    TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    # 007 — persistent bot counters for superadmin stats
+    """
+    CREATE TABLE IF NOT EXISTS bot_metrics (
+      metric_key  TEXT PRIMARY KEY,
+      value       BIGINT NOT NULL DEFAULT 0
+    )
+    """,
 ]
 
 

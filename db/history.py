@@ -145,6 +145,19 @@ async def delete_for_user(chat_id: int, user_id: int) -> int:
     )
     return deleted
 
+
+async def delete_everywhere_for_user(user_id: int) -> int:
+    """Delete all history rows for user across all chats."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM message_history WHERE user_id = $1",
+            user_id,
+        )
+    deleted = int(result.split()[-1])
+    logger.info("Deleted %d history rows globally for user_id=%d", deleted, user_id)
+    return deleted
+
 async def get_user_summary(user_id: int) -> str | None:
     """Return the latest cached profile summary for a user (across all chats)."""
     pool = get_pool()

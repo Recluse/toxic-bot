@@ -26,7 +26,9 @@ from i18n import get_text
 from config import config
 from handlers.language_select import send_language_picker
 from utils.admin_check import is_chat_admin
+from utils.rate_limiter import check_and_set_toxic
 from utils.reply_chain import collect_chain
+from utils.tg_safe import send_ephemeral_text
 
 logger = logging.getLogger(__name__)
 
@@ -186,8 +188,24 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = await settings_db.get_or_create(chat_id)
     lang     = settings["lang"]
 
+    if not check_and_set_toxic(chat_id, update.effective_user.id, cooldown_sec=300):
+        await send_ephemeral_text(
+            context,
+            chat_id=chat_id,
+            text=get_text("toxic_cooldown_active", lang),
+            reply_to_message_id=update.effective_message.message_id,
+            delay_sec=30,
+        )
+        return
+
     if not update.message.reply_to_message:
-        await update.message.reply_text(get_text("toxic_no_reply", lang))
+        await send_ephemeral_text(
+            context,
+            chat_id=chat_id,
+            text=get_text("toxic_no_reply", lang),
+            reply_to_message_id=update.effective_message.message_id,
+            delay_sec=30,
+        )
         return
 
     # Admin check — silently delete if caller is not an admin
@@ -218,7 +236,13 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
     elif not text:
-        await update.message.reply_text(get_text("toxic_no_text", lang))
+        await send_ephemeral_text(
+            context,
+            chat_id=chat_id,
+            text=get_text("toxic_no_text", lang),
+            reply_to_message_id=update.effective_message.message_id,
+            delay_sec=30,
+        )
         return
 
     # Delete the /toxic command message to keep the chat clean
@@ -242,7 +266,23 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Do not reply to users that opted out via /dont_touch_me.
     if await untouchables_db.is_protected(chat_id, target_user_id):
-        await context.bot.send_message(chat_id=chat_id, text=get_text("untouchable_blocked_toxic", lang))
+        await send_ephemeral_text(
+            context,
+            chat_id=chat_id,
+            text=get_text("untouchable_blocked_toxic", lang),
+            reply_to_message_id=target.message_id,
+            delay_sec=30,
+        )
+        return
+
+    if await untouchables_db.is_globally_protected(target_user_id):
+        await send_ephemeral_text(
+            context,
+            chat_id=chat_id,
+            text=get_text("untouchable_blocked_toxic", lang),
+            reply_to_message_id=target.message_id,
+            delay_sec=30,
+        )
         return
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
@@ -292,8 +332,20 @@ async def cmd_dont_touch_me(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     inserted = await untouchables_db.add(chat.id, user.id, username)
 
     if inserted:
-        await message.reply_text(get_text("dont_touch_me_added", lang))
+        await send_ephemeral_text(
+            context,
+            chat_id=chat.id,
+            text=get_text("dont_touch_me_added", lang),
+            reply_to_message_id=message.message_id,
+            delay_sec=30,
+        )
     else:
-        await message.reply_text(get_text("dont_touch_me_already", lang))
+        await send_ephemeral_text(
+            context,
+            chat_id=chat.id,
+            text=get_text("dont_touch_me_already", lang),
+            reply_to_message_id=message.message_id,
+            delay_sec=30,
+        )
 
     await _maybe_delete_command(update)

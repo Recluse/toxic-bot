@@ -169,3 +169,16 @@ async def delete_for_user(chat_id: int, user_id: int) -> None:
             chat_id, user_id,
         )
     logger.info("Deleted profile chat_id=%d user_id=%d", chat_id, user_id)
+
+
+async def delete_everywhere_for_user(user_id: int) -> int:
+    """Delete all profile rows for a user across all chats."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM user_summaries WHERE user_id = $1",
+            user_id,
+        )
+    deleted = int(result.split()[-1])
+    logger.info("Deleted %d profiles globally for user_id=%d", deleted, user_id)
+    return deleted

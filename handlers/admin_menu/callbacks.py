@@ -69,3 +69,17 @@ PREFIX_RESET_USER    = "act:reset_user:"
 PREFIX_VIEW_SUMMARY  = "act:summary:"
 PREFIX_UNTOUCHABLE_REMOVE = "act:untouchable_remove:"
 PREFIX_LANG_SET      = "lang:set:"
+
+# --- Private settings menu ---
+PM_MENU_MAIN         = "pm:menu:main"
+PM_MENU_TOXICITY     = "pm:menu:toxicity"
+PM_TOGGLE_GLOBAL_UNTOUCHABLE = "pm:toggle:global_untouchable"
+PM_MY_DOSSIER        = "pm:my_dossier"
+PM_RESET_ME          = "pm:reset_me"
+PM_RESET_ME_CONFIRM  = "pm:reset_me:confirm"
+PM_EXIT              = "pm:exit"
+
+def PM_SET_TOXICITY(level: int) -> str: return f"pm:set:toxicity:{level}"
+
+PREFIX_PM            = "pm:"
+PREFIX_PM_SET_TOXICITY = "pm:set:toxicity:"

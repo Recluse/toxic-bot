@@ -37,6 +37,7 @@ class DefaultChatConfig:
 @dataclass(frozen=True)
 class GroqConfig:
     model:         str
+    fallback_model: str
     vision_model:  str
     whisper_model: str
     temperature:   float
@@ -140,6 +141,7 @@ def load_config(ini_path: str = "config.ini") -> AppConfig:
         ),
         groq=GroqConfig(
             model=        ini.get(      "groq", "model",         fallback="moonshotai/kimi-k2-instruct-0905"),
+            fallback_model=ini.get(     "groq", "fallback_model", fallback="llama-3.3-70b-versatile"),
             vision_model= ini.get(      "groq", "vision_model",  fallback="meta-llama/llama-4-scout-17b-16e-instruct"),
             whisper_model=ini.get(      "groq", "whisper_model", fallback="whisper-large-v3-turbo"),
             temperature=  ini.getfloat( "groq", "temperature",   fallback=0.85),

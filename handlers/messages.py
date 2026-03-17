@@ -32,6 +32,7 @@ from telegram.ext import ContextTypes
 import ai.summarizer as summarizer
 import db.chat_settings as settings_db
 import db.history as history_db
+import db.metrics as metrics_db
 import db.untouchables as untouchables_db
 import db.user_profiles as profiles_db
 from ai.client import vision_completion
@@ -41,7 +42,7 @@ from ai.transcriber import transcribe
 from ai.vision import build_vision_message, get_image_base64
 from db.chats import upsert_chat
 from i18n import get_text
-from utils.rate_limiter import check_and_set
+from utils.rate_limiter import check_and_set, check_pm_media_quota, check_pm_text_quota
 from utils.reply_chain import collect_chain
 
 logger = logging.getLogger(__name__)
@@ -49,10 +50,6 @@ logger = logging.getLogger(__name__)
 # Per-chat message counters for frequency gating.
 # Resets to 0 each time the bot decides to reply.
 _msg_counters: dict[int, int] = defaultdict(int)
-
-# Toxicity level forced in private chats
-_PM_TOXICITY_LEVEL = 5
-
 
 async def handle_message(
     update: Update,
@@ -89,7 +86,7 @@ async def handle_message(
     await profiles_db.get_or_create(chat_id, user_id, username)
 
     lang         = settings["lang"]
-    toxicity     = _PM_TOXICITY_LEVEL if is_pm else settings["toxicity_level"]
+    toxicity     = settings["toxicity_level"]
     freq_min     = settings["freq_min"]
     freq_max     = settings["freq_max"]
     cooldown_sec = settings["reply_cooldown_sec"]
@@ -102,15 +99,28 @@ async def handle_message(
         logger.debug("Ignored untouchable user chat_id=%d user_id=%d", chat_id, user_id)
         return
 
+    if await untouchables_db.is_globally_protected(user_id):
+        logger.debug("Ignored globally untouchable user chat_id=%d user_id=%d", chat_id, user_id)
+        return
+
     # --- Extract text from different message types ---
     text:         str | None = None
     image_base64: str | None = None
     photo_file_id: str | None = None
 
     if message.text:
+        await metrics_db.increment("processed_text")
+        if is_pm and not check_pm_text_quota(chat_id, user_id):
+            await message.reply_text(get_text("pm_text_hour_limit", lang))
+            return
         text = message.text.strip()
 
     elif message.voice or message.audio:
+        await metrics_db.increment("processed_voice")
+        if is_pm and not check_pm_media_quota(chat_id, user_id):
+            await message.reply_text(get_text("pm_media_hour_limit", lang))
+            return
+
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         file_id  = (message.voice or message.audio).file_id
         is_voice = message.voice is not None
@@ -123,6 +133,11 @@ async def handle_message(
             return
 
     elif message.photo:
+        await metrics_db.increment("processed_image")
+        if is_pm and not check_pm_media_quota(chat_id, user_id):
+            await message.reply_text(get_text("pm_media_hour_limit", lang))
+            return
+
         # Do not call the vision model unless we decide to reply.
         # Determine word count from caption only (if any) for gating.
         photo_file_id = message.photo[-1].file_id

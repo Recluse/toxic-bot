@@ -97,6 +97,7 @@ def _add_settings_command(app: Application) -> None:
     Defined here to avoid a circular import between bot.py and admin_menu/.
     """
     from handlers.admin_menu.main_menu import send_main_menu
+    from handlers.pm_settings import send_pm_settings_menu
     import db.chat_settings as settings_db
     from utils.admin_check import is_chat_admin
     from i18n import get_text
@@ -104,7 +105,8 @@ def _add_settings_command(app: Application) -> None:
 
     async def cmd_settings(update, context):
         if update.effective_chat.type == ChatType.PRIVATE:
-            await update.message.reply_text(get_text("group_only", "en"))
+            settings = await settings_db.get_or_create(update.effective_chat.id)
+            await send_pm_settings_menu(update, context, lang=settings["lang"], edit=False)
             return
 
         if not await is_chat_admin(update):
