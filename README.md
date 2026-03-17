@@ -43,6 +43,10 @@ precision — powered by Groq LLM via a Cloudflare AI Gateway.
 - Flood control handling — retries automatically on Telegram rate limits
 - Multimodal support: `/explain` works on text, photos, voice messages
 - `/dont_touch_me` opt-out for group chats: bot ignores selected users (except `/explain`)
+- Private `/settings` menu: PM toxicity, dossier, global untouchable toggle, self-reset
+- PM hourly limits: text (10/h), media (5/h), `/explain` (5/h)
+- Groq fallback model when primary is over capacity (503)
+- Extended superadmin dashboards: runtime, activity counters, database sizes
 
 ---
 
@@ -156,6 +160,7 @@ min_words = 5
 
 [groq]
 model = moonshotai/kimi-k2-instruct-0905  # or llama3-groq-70b-8192-tool-use-preview
+fallback_model = llama-3.3-70b-versatile  # automatic fallback on 503/over-capacity
 vision_model  = meta-llama/llama-4-scout-17b-16e-instruct
 whisper_model = whisper-large-v3-turbo
 temperature = 0.85
@@ -180,7 +185,10 @@ No manual SQL required. Tables created:
 | `chat_settings`  | Per-chat configuration (toxicity, frequency, lang)     |
 | `message_history`| Conversation message history per chat                  |
 | `chats`          | Membership tracking (joined, active, kicked)           |
-| `user_profiles`  | Per-user psychological/behavioral summaries            |
+| `user_profiles` / `user_summaries` | Per-user psychological/behavioral summaries |
+| `untouchable_users` | Per-chat ignore list                                |
+| `global_untouchables` | Global opt-out list across all chats             |
+| `bot_metrics`    | Persistent counters for superadmin stats               |
 
 Chats are auto-registered on the first incoming message.
 
@@ -242,6 +250,7 @@ python setup_commands.py --force
 | `/about`           | PM + groups | Current personality settings for this chat       |
 | `/reset`           | PM + groups | Clear your personal conversation history         |
 | `/dont_touch_me`   | Groups      | Add yourself to untouchables                     |
+| `/settings`        | PM          | Open private settings menu                        |
 | `/toxicity_demo`   | PM + groups | Demo all toxicity levels                         |
 
 ### Admin (group admins only)
@@ -270,9 +279,11 @@ Superadmins (`SUPERADMIN_IDS` in `.env`). Commands work **only in private chat**
 | Command          | Description                                      |
 |------------------|--------------------------------------------------|
 | `/sa_chats`      | List all active chats with IDs and join dates    |
-| `/sa_stats`      | Total/active/inactive chat counts by type        |
+| `/sa_stats`      | Runtime, chat/user totals, processed content, DB sizes |
 | `/sa_broadcast`  | Send message to all active groups (conversation) |
 | `/cancel`        | Abort in-progress broadcast                      |
+
+`/sa_chats` enriches entries with live Telegram lookup by `chat_id` (name/title and `@username`) and falls back to DB data.
 
 ### Automatic PM notifications
 
@@ -295,6 +306,12 @@ Group admins: `/settings` → inline keyboard. Changes apply immediately.
 | Minimum words      | 3/5/7/10            | Ignore shorter messages                             |
 | User management    | List/reset profiles | View/delete user summaries                          |
 | Untouchables       | List/remove users   | Remove users from bot ignore list                   |
+
+In private chat, `/settings` opens a personal menu:
+- PM toxicity level
+- global untouchable toggle
+- dossier preview
+- remove user data from DB
 
 ---
 
@@ -343,6 +360,7 @@ toxic-bot/
 │   ├── chat_settings.py      # Per-chat CRUD
 │   ├── history.py            # Message history CRUD
 │   ├── chats.py              # Chat tracking CRUD
+│   ├── metrics.py            # Persistent bot counters
 │   ├── user_profiles.py      # User psych profiles CRUD
 │   └── untouchables.py       # Untouchable users CRUD
 ├── handlers/
@@ -350,6 +368,7 @@ toxic-bot/
 │   ├── commands_explain.py   # /explain (multimodal)
 │   ├── messages.py           # Main handler + freq/cooldown logic
 │   ├── lifecycle.py          # Join/leave + superadmin PMs
+│   ├── pm_settings.py        # Private /settings menu
 │   ├── superadmin.py         # /sa_* commands
 │   ├── language_select.py    # Language picker
 │   └── admin_menu/
