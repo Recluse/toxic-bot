@@ -20,6 +20,7 @@ voice/audio → transcriber → plain text → normal pipeline
 photo       → vision model → description → normal pipeline
 """
 
+import asyncio
 import logging
 import random
 from collections import defaultdict
@@ -28,7 +29,10 @@ from telegram import Update
 from telegram.constants import ChatAction, ChatType
 from telegram.ext import ContextTypes
 
+import ai.summarizer as summarizer
 import db.chat_settings as settings_db
+import db.history as history_db
+import db.user_profiles as profiles_db
 from ai.client import vision_completion
 from ai.modes import BotMode
 from ai.responder import get_reply
@@ -78,6 +82,11 @@ async def handle_message(
         username=getattr(chat, "username", None),
     )
 
+    # Ensure the user is registered in the profile table so admins can see them.
+    # This also gives a stable place to store the username even if no profile has
+    # yet been generated via summarization.
+    await profiles_db.get_or_create(chat_id, user_id, username)
+
     lang         = settings["lang"]
     toxicity     = _PM_TOXICITY_LEVEL if is_pm else settings["toxicity_level"]
     freq_min     = settings["freq_min"]
@@ -126,6 +135,30 @@ async def handle_message(
     if not is_pm and word_count < min_words and not photo_file_id:
         logger.debug("Too short (%d < %d) — ignored chat_id=%d", word_count, min_words, chat_id)
         return
+
+    # Update the user's profile in the background (if the message is not noise).
+    if text and not history_db.is_noise(text):
+        existing_summary = await history_db.get_user_summary(user_id)
+        try:
+            context.application.create_task(
+                summarizer.update_profile(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    username=username,
+                    new_message=text,
+                    existing_summary=existing_summary or "",
+                )
+            )
+        except Exception:
+            asyncio.create_task(
+                summarizer.update_profile(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    username=username,
+                    new_message=text,
+                    existing_summary=existing_summary or "",
+                )
+            )
 
     bot_id          = context.bot.id
     is_reply_to_bot = (

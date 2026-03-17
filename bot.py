@@ -47,7 +47,7 @@ from handlers.superadmin import (
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    level=logging.DEBUG,
+    level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,12 @@ def _add_settings_command(app: Application) -> None:
 
         settings = await settings_db.get_or_create(update.effective_chat.id)
         await send_main_menu(update, context, lang=settings["lang"], edit=False)
+
+        # Remove the /settings command message in group chats to keep chat clean.
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
 
     app.add_handler(CommandHandler("settings", cmd_settings))
 

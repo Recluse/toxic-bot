@@ -67,6 +67,7 @@
   "reset_chat_confirm":      "All chat history and profiles cleared.",
   "reset_user_done":         "History and profile cleared for {username}.",
   "view_summary_none":       "No profile data yet for {username}.",
+  "view_summary_recent_messages": "Recent messages:",
   "view_summary":            "<b>Profile: {username}</b>\n\n{summary}",
 
   "level_name_1":            "Cold Disappointment",

@@ -39,13 +39,28 @@ async def show_user_mgmt_menu(
     settings: dict,
     lang: str,
 ) -> None:
-    """
-    Show the user management menu.
+    """Show the user management menu.
+
     Lists up to 10 most recently active users as individual rows.
     Each user row has two buttons: [Reset] [Summary].
+
+    If profiles are not yet generated in `user_summaries`, we attempt to
+    resolve a nicer display name via the Telegram API (chat member info).
     """
     chat_id = update.effective_chat.id
     users   = await profiles_db.list_users(chat_id)
+
+    # If we are falling back to message_history-derived users, try to resolve
+    # a nicer name from Telegram (username/full name) for display.
+    if users and all(not u.get("username") for u in users):
+        for u in users[:10]:
+            try:
+                member = await context.bot.get_chat_member(chat_id, u["user_id"])
+                tg_user = member.user
+                u["username"] = tg_user.username or tg_user.full_name
+            except Exception:
+                # Leave it as-is (it will fall back to id:123456)
+                pass
 
     rows = []
 
@@ -66,7 +81,12 @@ async def show_user_mgmt_menu(
         ])
     else:
         for user in users[:10]:
-            display = f"@{user['username']}" if user["username"] else f"id:{user['user_id']}"
+            display = f"@{user['username']}" if user.get("username") else f"id:{user['user_id']}"
+            updated_at = user.get("updated_at")
+            if updated_at:
+                # Show last activity date to help admins choose which profiles to inspect.
+                display = f"{display} ({updated_at.strftime('%Y-%m-%d')})"
+
             rows.append([
                 InlineKeyboardButton(
                     f"✕ {display}",
@@ -165,10 +185,13 @@ async def handle_view_summary(
     settings: dict,
     lang: str,
 ) -> None:
-    """
-    Display a user's stored psychological profile summary.
+    """Display a user's stored psychological profile summary.
+
     callback_query.answer() renders plain text only — strip HTML tags
     before passing the summary text to avoid literal <b> appearing in popup.
+
+    If the user has no summary yet, fall back to showing their most recent
+    messages from `message_history`, so admins can still get some context.
     """
     chat_id = update.effective_chat.id
 
@@ -178,8 +201,20 @@ async def handle_view_summary(
 
     if not summary:
         text = get_text("view_summary_none", lang, username=username)
+
+        # Offer a quick peek at recent messages for this user if we have any.
+        # Keep it short to fit into Telegram's callback answer limits.
+        recent = await history_db.get_recent_for_user(user_id, chat_id, limit=5)
+        user_msgs = [m["content"] for m in recent if m["role"] == "user"]
+        if user_msgs:
+            snippet = "\n".join(f"• {m}" for m in user_msgs[-3:])
+            text += "\n\n" + get_text("view_summary_recent_messages", lang) + "\n" + snippet
     else:
         text = get_text("view_summary", lang, username=username, summary=summary)
 
     # answer() is plain text only — strip any HTML before sending
-    await update.callback_query.answer(_strip_tags(text)[:200], show_alert=True)
+    text = _strip_tags(text)
+    if len(text) > 200:
+        text = text[:197].rstrip() + "..."
+
+    await update.callback_query.answer(text, show_alert=True)

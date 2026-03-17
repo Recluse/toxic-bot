@@ -32,6 +32,7 @@ _MIGRATIONS = [
     CREATE TABLE IF NOT EXISTS message_history (
         id         BIGSERIAL PRIMARY KEY,
         chat_id    BIGINT NOT NULL,
+        user_id    BIGINT,
         role       TEXT   NOT NULL,
         content    TEXT   NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -39,7 +40,26 @@ _MIGRATIONS = [
     """,
     """
     ALTER TABLE message_history
+        ADD COLUMN IF NOT EXISTS user_id BIGINT;
+    """,
+    """
+    ALTER TABLE message_history
         ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    """,
+    """
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+          SELECT 1
+            FROM pg_class
+           WHERE relkind = 'i'
+             AND relname = 'message_history_user_id_idx'
+      ) THEN
+          CREATE INDEX message_history_user_id_idx
+            ON message_history (user_id, created_at DESC);
+      END IF;
+    END
+    $$;
     """,
     """
     DO $$
@@ -70,10 +90,14 @@ _MIGRATIONS = [
     CREATE TABLE IF NOT EXISTS user_summaries (
         chat_id    BIGINT NOT NULL,
         user_id    BIGINT NOT NULL,
+        username   TEXT,
         summary    TEXT   NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (chat_id, user_id)
     )
+    """,
+    """
+    ALTER TABLE user_summaries ADD COLUMN IF NOT EXISTS username TEXT
     """,
     # 003 — username column for chats
     """

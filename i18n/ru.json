@@ -67,6 +67,7 @@
   "reset_chat_confirm":      "История чата и все профили очищены.",
   "reset_user_done":         "История и профиль для {username} очищены.",
   "view_summary_none":       "Данных профиля для {username} ещё нет.",
+  "view_summary_recent_messages": "Последние сообщения:",
   "view_summary":            "<b>Профиль: {username}</b>\n\n{summary}",
 
   "level_name_1":            "Холодное разочарование",

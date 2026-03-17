@@ -68,9 +68,10 @@ async def _chat_reply(
     lang:           str,
     extra_context:  list[dict],
 ) -> str:
-    # Load recent history and optional user profile for context window
-    history       = await history_db.get_recent(chat_id)
-    user_summary  = await history_db.get_user_summary(chat_id, user_id)
+    # Load recent history (prefer per-user when available, else fall back
+    # to chat-scoped history for legacy data) and optional profile summary.
+    history       = await history_db.get_recent_for_user(user_id, chat_id)
+    user_summary  = await history_db.get_user_summary(user_id)
     system_prompt = get_system_prompt(toxicity_level, lang, user_summary)
 
     messages = [{"role": "system", "content": system_prompt}]

@@ -34,9 +34,18 @@ logger = logging.getLogger(__name__)
 _DEMO_QUESTION = "I think I'm pretty smart."
 
 
+async def _maybe_delete_command(update: Update) -> None:
+    """Delete a command message if it was sent in a non-private chat."""
+    if update.effective_chat and update.effective_chat.type != update.effective_chat.PRIVATE:
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    /start — Greet the user and offer language selection on first encounter.
+    /start — Greet the user and offer language selection on first run.
 
     On first run (no DB row yet) the language picker is sent before the greeting.
     On subsequent runs the chat's current language is used.
@@ -53,6 +62,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Always show language picker on /start so it can be changed any time
     await send_language_picker(update, context, default_lang=lang)
 
+    await _maybe_delete_command(update)
+
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -66,6 +77,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     key = "help_full" if is_pm else "help_short"
     await update.message.reply_text(get_text(key, lang), parse_mode=ParseMode.HTML)
+
+    await _maybe_delete_command(update)
 
 
 async def cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -92,6 +105,8 @@ async def cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
+    await _maybe_delete_command(update)
+
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -107,6 +122,8 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     deleted = await history_db.delete_for_user(chat_id, user_id)
     key = "reset_done" if deleted > 0 else "reset_no_history"
     await update.message.reply_text(get_text(key, lang))
+
+    await _maybe_delete_command(update)
 
 
 async def cmd_toxicity_demo(
@@ -151,6 +168,8 @@ async def cmd_toxicity_demo(
         "\n".join(parts),
         parse_mode=ParseMode.HTML,
     )
+
+    await _maybe_delete_command(update)
 
 
 async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

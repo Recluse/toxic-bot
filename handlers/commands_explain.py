@@ -130,6 +130,13 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         target.message_id,
     )
 
+    # Clean up command messages in group chats.
+    if chat.type != ChatType.PRIVATE:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
 
 def _sanitize_telegram_html(text: str) -> str:
     """Sanitize HTML output for Telegram's limited HTML subset.
