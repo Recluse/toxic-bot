@@ -13,11 +13,12 @@ Commands:
 import logging
 from telegram import Update, ReplyParameters
 from telegram.ext import ContextTypes
-from telegram.constants import ParseMode, ChatAction
+from telegram.constants import ParseMode, ChatAction, ChatType
 from ai.vision import get_image_base64
 
 import db.chat_settings as settings_db
 import db.history as history_db
+import db.untouchables as untouchables_db
 from ai.responder import get_reply
 from ai.prompts import get_system_prompt
 from ai.client import groq_client
@@ -36,7 +37,7 @@ _DEMO_QUESTION = "I think I'm pretty smart."
 
 async def _maybe_delete_command(update: Update) -> None:
     """Delete a command message if it was sent in a non-private chat."""
-    if update.effective_chat and update.effective_chat.type != update.effective_chat.PRIVATE:
+    if update.effective_chat and update.effective_chat.type != ChatType.PRIVATE:
         try:
             await update.message.delete()
         except Exception:
@@ -239,6 +240,11 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         max_depth=settings["reply_chain_depth"],
     )
 
+    # Do not reply to users that opted out via /dont_touch_me.
+    if await untouchables_db.is_protected(chat_id, target_user_id):
+        await context.bot.send_message(chat_id=chat_id, text=get_text("untouchable_blocked_toxic", lang))
+        return
+
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     try:
@@ -264,3 +270,30 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             chat_id=chat_id,
         ),
     )
+
+
+async def cmd_dont_touch_me(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Add caller to untouchable list for this group chat."""
+    chat = update.effective_chat
+    user = update.effective_user
+    message = update.effective_message
+
+    if not chat or not user or not message:
+        return
+
+    settings = await settings_db.get_or_create(chat.id)
+    lang = settings["lang"]
+
+    if chat.type == ChatType.PRIVATE:
+        await message.reply_text(get_text("group_only", lang))
+        return
+
+    username = user.username or user.full_name
+    inserted = await untouchables_db.add(chat.id, user.id, username)
+
+    if inserted:
+        await message.reply_text(get_text("dont_touch_me_added", lang))
+    else:
+        await message.reply_text(get_text("dont_touch_me_already", lang))
+
+    await _maybe_delete_command(update)

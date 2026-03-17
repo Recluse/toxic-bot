@@ -15,8 +15,9 @@ from telegram.constants import ParseMode
 import db.chat_settings as settings_db
 import db.history as history_db
 import db.user_profiles as profiles_db
+import db.untouchables as untouchables_db
 from i18n import get_text
-from utils.rate_limiter import reset_chat as rl_reset_chat
+from utils.rate_limiter import reset_chat as rl_reset_chat, reset_chat_explain as rl_reset_chat_explain
 from utils.tg_safe import safe_edit
 from handlers.admin_menu.callbacks import (
     MENU_MAIN, RESET_CHAT, RESET_CHAT_CONFIRM,
@@ -147,7 +148,9 @@ async def handle_reset_chat_confirm(
     chat_id = update.effective_chat.id
     await history_db.delete_for_chat(chat_id)
     await profiles_db.delete_for_chat(chat_id)
+    await untouchables_db.delete_for_chat(chat_id)
     rl_reset_chat(chat_id)
+    rl_reset_chat_explain(chat_id)
 
     await update.callback_query.answer(
         _strip_tags(get_text("reset_chat_confirm", lang)), show_alert=False
@@ -170,6 +173,7 @@ async def handle_reset_user(
 
     await history_db.delete_for_user(chat_id, user_id)
     await profiles_db.delete_for_user(chat_id, user_id)
+    await untouchables_db.remove(chat_id, user_id)
 
     await update.callback_query.answer(
         _strip_tags(get_text("reset_user_done", lang, username=username)),

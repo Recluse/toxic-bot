@@ -30,6 +30,7 @@ from ai.transcriber import transcribe
 from ai.vision import get_image_base64
 import db.chat_settings as settings_db
 from i18n import get_text
+from utils.rate_limiter import check_and_set_explain
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,12 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     settings    = await settings_db.get_or_create(chat.id)
     lang        = settings["lang"]
     is_pm       = chat.type == ChatType.PRIVATE
+
+    if not is_pm:
+        explain_cd_min = int(settings.get("explain_cooldown_min", 10))
+        if not check_and_set_explain(chat.id, user.id, explain_cd_min * 60):
+            await message.reply_text(get_text("explain_cooldown_active", lang, minutes=explain_cd_min))
+            return
 
     # Text typed inline after the command: "/explain ядерная физика"
     inline_text = " ".join(context.args).strip() if context.args else ""

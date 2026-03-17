@@ -16,13 +16,21 @@ import db.chat_settings as settings_db
 from i18n import get_text
 from utils.tg_safe import safe_edit
 from handlers.admin_menu.callbacks import (
-    SET_COOLDOWN, SET_CHAIN, SET_MIN_WORDS, MENU_MAIN,
+    SET_COOLDOWN, SET_CHAIN, SET_MIN_WORDS,
+    EXPLAIN_CD_DOWN, EXPLAIN_CD_UP, EXPLAIN_CD_SAVE,
+    MENU_MAIN,
 )
 
 # Available option values for each setting
 _COOLDOWN_OPTIONS  = [30, 60, 120, 300]   # seconds
 _CHAIN_OPTIONS     = [3, 5, 7, 10]        # message depth
 _MIN_WORDS_OPTIONS = [3, 5, 7, 10]        # word count
+
+# /explain cooldown options (minutes), adjustable by +/-10
+_EXPLAIN_CD_MIN = 10
+_EXPLAIN_CD_MAX = 600
+_EXPLAIN_CD_STEP = 10
+_KEY_STAGED_EXPLAIN_CD = "explain_cd_staged"
 
 
 def _mark(value, current) -> str:
@@ -154,3 +162,71 @@ async def handle_set_min_words(
     )
     settings["min_words"] = value
     await show_min_words_menu(update, context, settings, lang)
+
+
+def _get_staged_explain_cd(context: ContextTypes.DEFAULT_TYPE, settings: dict) -> int:
+    return int(context.user_data.get(_KEY_STAGED_EXPLAIN_CD, settings["explain_cooldown_min"]))
+
+
+def build_explain_cooldown_keyboard(lang: str, current: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("▼", callback_data=EXPLAIN_CD_DOWN),
+            InlineKeyboardButton(f"{current} min", callback_data="noop"),
+            InlineKeyboardButton("▲", callback_data=EXPLAIN_CD_UP),
+        ],
+        [InlineKeyboardButton(get_text("freq_save", lang), callback_data=EXPLAIN_CD_SAVE)],
+        [InlineKeyboardButton(get_text("menu_back", lang), callback_data=MENU_MAIN)],
+    ])
+
+
+async def show_explain_cooldown_menu(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    settings: dict,
+    lang: str,
+) -> None:
+    current = _get_staged_explain_cd(context, settings)
+    await safe_edit(
+        update,
+        get_text("explain_cooldown_title", lang, val=current),
+        build_explain_cooldown_keyboard(lang, current),
+    )
+
+
+async def handle_explain_cooldown_adjust(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    action: str,
+    settings: dict,
+    lang: str,
+) -> None:
+    value = _get_staged_explain_cd(context, settings)
+
+    if action == EXPLAIN_CD_UP:
+        value = min(_EXPLAIN_CD_MAX, value + _EXPLAIN_CD_STEP)
+    elif action == EXPLAIN_CD_DOWN:
+        value = max(_EXPLAIN_CD_MIN, value - _EXPLAIN_CD_STEP)
+
+    context.user_data[_KEY_STAGED_EXPLAIN_CD] = value
+    await update.callback_query.answer()
+    await show_explain_cooldown_menu(update, context, settings, lang)
+
+
+async def handle_explain_cooldown_save(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    settings: dict,
+    lang: str,
+) -> None:
+    value = _get_staged_explain_cd(context, settings)
+    chat_id = update.effective_chat.id
+
+    await settings_db.set_explain_cooldown(chat_id, value)
+    context.user_data.pop(_KEY_STAGED_EXPLAIN_CD, None)
+    settings["explain_cooldown_min"] = value
+
+    await update.callback_query.answer(
+        get_text("explain_cooldown_saved", lang, val=value), show_alert=False
+    )
+    await show_explain_cooldown_menu(update, context, settings, lang)

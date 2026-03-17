@@ -32,6 +32,7 @@ from telegram.ext import ContextTypes
 import ai.summarizer as summarizer
 import db.chat_settings as settings_db
 import db.history as history_db
+import db.untouchables as untouchables_db
 import db.user_profiles as profiles_db
 from ai.client import vision_completion
 from ai.modes import BotMode
@@ -94,6 +95,12 @@ async def handle_message(
     cooldown_sec = settings["reply_cooldown_sec"]
     chain_depth  = settings["reply_chain_depth"]
     min_words    = settings["min_words"]
+
+    # Users in untouchable list are ignored in regular chat mode.
+    # /explain is handled by a dedicated command handler and still works.
+    if not is_pm and await untouchables_db.is_protected(chat_id, user_id):
+        logger.debug("Ignored untouchable user chat_id=%d user_id=%d", chat_id, user_id)
+        return
 
     # --- Extract text from different message types ---
     text:         str | None = None

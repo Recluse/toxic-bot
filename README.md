@@ -42,6 +42,7 @@ precision — powered by Groq LLM via a Cloudflare AI Gateway.
 - Global error handler — no silent crashes
 - Flood control handling — retries automatically on Telegram rate limits
 - Multimodal support: `/explain` works on text, photos, voice messages
+- `/dont_touch_me` opt-out for group chats: bot ignores selected users (except `/explain`)
 
 ---
 
@@ -240,21 +241,22 @@ python setup_commands.py --force
 | `/help`            | PM + groups | Usage instructions                               |
 | `/about`           | PM + groups | Current personality settings for this chat       |
 | `/reset`           | PM + groups | Clear your personal conversation history         |
+| `/dont_touch_me`   | Groups      | Add yourself to untouchables                     |
 | `/toxicity_demo`   | PM + groups | Demo all toxicity levels                         |
 
 ### Admin (group admins only)
 
-| Command     | Where  | Description                                 |
-|-------------|--------|---------------------------------------------|
+| Command     | Where  | Description                                    |
+|-------------|--------|------------------------------------------------|
 | `/toxic`    | Groups | Reply to a message to force the bot to respond |
-| `/settings` | Groups | Open the inline settings menu                |
+| `/settings` | Groups | Open the inline settings menu                  |
 
 Admin commands are silently deleted if caller is not admin.
 
 ### Explain (reply to message)
 
-| Command  | Where       | Description                                      |
-|----------|-------------|--------------------------------------------------|
+| Command  | Where       | Description                                        |
+|----------|-------------|----------------------------------------------------|
 | `/explain` | PM + groups | Scientific/factual analysis of text/photo/voice  |
 
 ---
@@ -283,14 +285,16 @@ Superadmins (`SUPERADMIN_IDS` in `.env`). Commands work **only in private chat**
 
 Group admins: `/settings` → inline keyboard. Changes apply immediately.
 
-| Setting            | Range / Options     | Description                                      |
-|--------------------|---------------------|--------------------------------------------------|
-| Toxicity level     | 1–5                 | 1=mild, 5=nuclear                                |
-| Reply frequency    | min–max (random)    | How often bot responds                           |
-| User cooldown      | 30/60/120/300 sec   | Time between replies to same user                |
-| Reply chain depth  | 3/5/7/10            | Messages back in reply chain                     |
-| Minimum words      | 3/5/7/10            | Ignore shorter messages                          |
-| User management    | List/reset profiles | View/delete user summaries                       |
+| Setting            | Range / Options     | Description                                         |
+|--------------------|---------------------|-----------------------------------------------------|
+| Toxicity level     | 1–5                 | 1=mild, 5=nuclear                                   |
+| Reply frequency    | min–max (random)    | How often bot responds (adjustment step: 10)        |
+| User cooldown      | 30/60/120/300 sec   | Time between replies to same user                   |
+| `/explain` cooldown| 10–600 min (step 10)| Time between `/explain` requests per user in groups |
+| Reply chain depth  | 3/5/7/10            | Messages back in reply chain                        |
+| Minimum words      | 3/5/7/10            | Ignore shorter messages                             |
+| User management    | List/reset profiles | View/delete user summaries                          |
+| Untouchables       | List/remove users   | Remove users from bot ignore list                   |
 
 ---
 
@@ -339,9 +343,10 @@ toxic-bot/
 │   ├── chat_settings.py      # Per-chat CRUD
 │   ├── history.py            # Message history CRUD
 │   ├── chats.py              # Chat tracking CRUD
-│   └── user_profiles.py      # User psych profiles CRUD
+│   ├── user_profiles.py      # User psych profiles CRUD
+│   └── untouchables.py       # Untouchable users CRUD
 ├── handlers/
-│   ├── commands_public.py    # /start /help /about /reset /toxicity_demo /toxic
+│   ├── commands_public.py    # /start /help /about /reset /dont_touch_me /toxicity_demo /toxic
 │   ├── commands_explain.py   # /explain (multimodal)
 │   ├── messages.py           # Main handler + freq/cooldown logic
 │   ├── lifecycle.py          # Join/leave + superadmin PMs
@@ -354,6 +359,7 @@ toxic-bot/
 │       ├── toxicity_menu.py      # Toxicity levels
 │       ├── simple_choice_menus.py# Cooldown/chain/minwords
 │       ├── user_management_menu.py# User profiles UI
+│       ├── untouchables_menu.py  # Untouchables UI
 │       └── router.py             # Callback dispatcher
 ├── i18n/
 │   ├── __init__.py         # gettext(key, lang, **kwargs)

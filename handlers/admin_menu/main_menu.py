@@ -12,8 +12,8 @@ from telegram.constants import ParseMode
 from i18n import get_text
 from utils.tg_safe import safe_edit
 from handlers.admin_menu.callbacks import (
-    MENU_TOXICITY, MENU_FREQUENCY, MENU_COOLDOWN,
-    MENU_CHAIN, MENU_MIN_WORDS, MENU_USER_MGMT, MENU_EXIT,
+    MENU_TOXICITY, MENU_FREQUENCY, MENU_COOLDOWN, MENU_EXPLAIN_COOLDOWN,
+    MENU_CHAIN, MENU_MIN_WORDS, MENU_USER_MGMT, MENU_UNTOUCHABLES, MENU_EXIT,
 )
 
 
@@ -24,9 +24,11 @@ def build_main_keyboard(lang: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t("menu_toxicity"),    callback_data=MENU_TOXICITY)],
         [InlineKeyboardButton(t("menu_frequency"),   callback_data=MENU_FREQUENCY)],
         [InlineKeyboardButton(t("menu_cooldown"),    callback_data=MENU_COOLDOWN)],
+        [InlineKeyboardButton(t("menu_explain_cooldown"), callback_data=MENU_EXPLAIN_COOLDOWN)],
         [InlineKeyboardButton(t("menu_reply_chain"), callback_data=MENU_CHAIN)],
         [InlineKeyboardButton(t("menu_min_words"),   callback_data=MENU_MIN_WORDS)],
         [InlineKeyboardButton(t("menu_user_mgmt"),   callback_data=MENU_USER_MGMT)],
+        [InlineKeyboardButton(t("menu_untouchables"), callback_data=MENU_UNTOUCHABLES)],
         [InlineKeyboardButton(t("menu_exit"),        callback_data=MENU_EXIT)],
     ])
 

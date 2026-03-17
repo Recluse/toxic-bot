@@ -34,6 +34,7 @@ from handlers.commands_public import (
     cmd_reset,
     cmd_toxicity_demo,
     cmd_toxic,
+    cmd_dont_touch_me,
 )
 from handlers.commands_explain import cmd_explain
 from handlers.messages import handle_message
@@ -154,6 +155,7 @@ def main() -> None:
     app.add_handler(CommandHandler("reset",         cmd_reset))
     app.add_handler(CommandHandler("toxicity_demo", cmd_toxicity_demo))
     app.add_handler(CommandHandler("toxic",         cmd_toxic))
+    app.add_handler(CommandHandler("dont_touch_me", cmd_dont_touch_me))
     app.add_handler(CommandHandler("explain",       cmd_explain))
 
     # --- Admin settings menu ---

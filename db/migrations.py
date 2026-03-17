@@ -23,10 +23,15 @@ _MIGRATIONS = [
         freq_min           INTEGER NOT NULL DEFAULT 5,
         freq_max           INTEGER NOT NULL DEFAULT 15,
         reply_cooldown_sec INTEGER NOT NULL DEFAULT 60,
+      explain_cooldown_min INTEGER NOT NULL DEFAULT 10,
         reply_chain_depth  INTEGER NOT NULL DEFAULT 5,
         min_words          INTEGER NOT NULL DEFAULT 5,
         created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+    """,
+    """
+    ALTER TABLE chat_settings
+      ADD COLUMN IF NOT EXISTS explain_cooldown_min INTEGER NOT NULL DEFAULT 10;
     """,
     """
     CREATE TABLE IF NOT EXISTS message_history (
@@ -131,6 +136,31 @@ _MIGRATIONS = [
              AND relname = 'history_chat_id_idx'
       ) THEN
           ALTER INDEX history_chat_id_idx RENAME TO message_history_chat_id_idx;
+      END IF;
+    END
+    $$;
+    """,
+    # 005 — untouchable users list (ignored by bot except /explain)
+    """
+    CREATE TABLE IF NOT EXISTS untouchable_users (
+        chat_id     BIGINT NOT NULL,
+        user_id     BIGINT NOT NULL,
+        username    TEXT,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (chat_id, user_id)
+    )
+    """,
+    """
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+          SELECT 1
+            FROM pg_class
+           WHERE relkind = 'i'
+             AND relname = 'untouchable_users_chat_id_idx'
+      ) THEN
+          CREATE INDEX untouchable_users_chat_id_idx
+            ON untouchable_users (chat_id, created_at DESC);
       END IF;
     END
     $$;

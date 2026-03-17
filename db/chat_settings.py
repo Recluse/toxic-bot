@@ -21,6 +21,7 @@ _ALLOWED_FIELDS = frozenset({
     "freq_min",
     "freq_max",
     "reply_cooldown_sec",
+    "explain_cooldown_min",
     "reply_chain_depth",
     "min_words",
 })
@@ -48,8 +49,8 @@ async def get_or_create(chat_id: int) -> dict:
                 """
                 INSERT INTO chat_settings
                     (chat_id, lang, toxicity_level, freq_min, freq_max,
-                     reply_cooldown_sec, reply_chain_depth, min_words)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                     reply_cooldown_sec, explain_cooldown_min, reply_chain_depth, min_words)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 ON CONFLICT (chat_id) DO NOTHING
                 RETURNING *
                 """,
@@ -59,6 +60,7 @@ async def get_or_create(chat_id: int) -> dict:
                 d.freq_min,
                 d.freq_max,
                 d.reply_cooldown_sec,
+                d.explain_cooldown_min,
                 d.reply_chain_depth,
                 d.min_words,
             )
@@ -129,3 +131,10 @@ async def set_frequency(chat_id: int, freq_min: int, freq_max: int) -> None:
             freq_min, freq_max, chat_id,
         )
     logger.info("chat_id=%d frequency set to %d–%d", chat_id, freq_min, freq_max)
+
+
+async def set_explain_cooldown(chat_id: int, minutes: int) -> None:
+    """Set /explain cooldown in minutes for group chats (10..600, step 10)."""
+    if minutes < 10 or minutes > 600 or minutes % 10 != 0:
+        raise ValueError("explain_cooldown_min must be in range 10..600 with step 10")
+    await update_field(chat_id, "explain_cooldown_min", minutes)

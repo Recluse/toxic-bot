@@ -240,6 +240,7 @@ python setup_commands.py --force
 | `/help`            | ЛС + групи  | Інструкція з використання                          |
 | `/about`           | ЛС + групи  | Поточні налаштування особистості для цього чату    |
 | `/reset`           | ЛС + групи  | Очистити свою історію розмови                      |
+| `/dont_touch_me`   | Групи       | Додати себе в недоторканні                         |
 | `/toxicity_demo`   | ЛС + групи  | Демо всіх рівнів токсичності                       |
 
 ### Для адміністраторів (тільки в групах)
@@ -288,9 +289,11 @@ python setup_commands.py --force
 | Рівень токсичності | 1–5                 | 1=м'яко, 5=ядерно                                  |
 | Частота відповідей | min–max (випадково) | Як часто бот вступає в розмову                     |
 | Кулдаун користувача| 30/60/120/300 сек   | Мінімальний інтервал між відповідями одному юзеру  |
+| Кулдаун `/explain` | 10–600 хв (крок 10) | Інтервал між `/explain` від одного юзера в групах  |
 | Глибина ланцюжка   | 3/5/7/10            | Скільки повідомлень назад читає в reply chain      |
 | Мінімум слів       | 3/5/7/10            | Ігнорувати повідомлення коротші за це              |
 | Керування юзерами  | Перегляд/скидання   | Перегляд і видалення профілів користувачів         |
+| Недоторканні       | Список/видалення    | Видалення користувачів зі списку ігнору бота       |
 
 ---
 
@@ -339,9 +342,10 @@ toxic-bot/
 │   ├── chat_settings.py      # CRUD налаштувань чату
 │   ├── history.py            # CRUD історії повідомлень
 │   ├── chats.py              # CRUD трекінгу чатів
-│   └── user_profiles.py      # CRUD психологічних профілів
+│   ├── user_profiles.py      # CRUD психологічних профілів
+│   └── untouchables.py       # CRUD недоторканних користувачів
 ├── handlers/
-│   ├── commands_public.py    # /start /help /about /reset /toxicity_demo /toxic
+│   ├── commands_public.py    # /start /help /about /reset /dont_touch_me /toxicity_demo /toxic
 │   ├── commands_explain.py   # /explain (мультимодальний)
 │   ├── messages.py           # Основний хендлер + freq/cooldown логіка
 │   ├── lifecycle.py          # Вступ/вихід + PM суперадміна
@@ -354,6 +358,7 @@ toxic-bot/
 │       ├── toxicity_menu.py      # Меню рівнів токсичності
 │       ├── simple_choice_menus.py# Cooldown/chain/minwords
 │       ├── user_management_menu.py# UI керування профілями
+│       ├── untouchables_menu.py  # UI недоторканних
 │       └── router.py             # Диспетчер callback
 ├── i18n/
 │   ├── __init__.py         # gettext(key, lang, **kwargs)

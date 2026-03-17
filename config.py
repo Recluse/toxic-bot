@@ -29,6 +29,7 @@ class DefaultChatConfig:
     freq_min:           int
     freq_max:           int
     reply_cooldown_sec: int
+    explain_cooldown_min: int
     reply_chain_depth:  int
     min_words:          int
 
@@ -133,6 +134,7 @@ def load_config(ini_path: str = "config.ini") -> AppConfig:
             freq_min=          ini.getint("defaults", "freq_min",            fallback=5),
             freq_max=          ini.getint("defaults", "freq_max",            fallback=15),
             reply_cooldown_sec=ini.getint("defaults", "reply_cooldown_sec",  fallback=60),
+            explain_cooldown_min=ini.getint("defaults", "explain_cooldown_min", fallback=10),
             reply_chain_depth= ini.getint("defaults", "reply_chain_depth",   fallback=5),
             min_words=         ini.getint("defaults", "min_words",           fallback=5),
         ),

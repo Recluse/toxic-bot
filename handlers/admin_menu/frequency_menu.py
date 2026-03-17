@@ -22,6 +22,7 @@ from handlers.admin_menu.callbacks import (
 # Hard limits to prevent nonsensical values
 _FREQ_MIN_FLOOR   = 1
 _FREQ_MAX_CEILING = 100
+_FREQ_STEP        = 10
 
 # Keys for staging unsaved changes in context.user_data
 _KEY_STAGED_MIN = "freq_staged_min"
@@ -107,13 +108,13 @@ async def handle_freq_adjust(
     staged_min, staged_max = _get_staged(context, settings)
 
     if action == FREQ_MIN_UP:
-        staged_min = min(staged_min + 1, staged_max)
+        staged_min = min(staged_min + _FREQ_STEP, staged_max)
     elif action == FREQ_MIN_DOWN:
-        staged_min = max(_FREQ_MIN_FLOOR, staged_min - 1)
+        staged_min = max(_FREQ_MIN_FLOOR, staged_min - _FREQ_STEP)
     elif action == FREQ_MAX_UP:
-        staged_max = min(_FREQ_MAX_CEILING, staged_max + 1)
+        staged_max = min(_FREQ_MAX_CEILING, staged_max + _FREQ_STEP)
     elif action == FREQ_MAX_DOWN:
-        staged_max = max(staged_min, staged_max - 1)
+        staged_max = max(staged_min, staged_max - _FREQ_STEP)
 
     context.user_data[_KEY_STAGED_MIN] = staged_min
     context.user_data[_KEY_STAGED_MAX] = staged_max

@@ -30,6 +30,7 @@ from handlers.admin_menu.frequency_menu import (
 )
 from handlers.admin_menu.simple_choice_menus import (
     show_cooldown_menu,   handle_set_cooldown,
+    show_explain_cooldown_menu, handle_explain_cooldown_adjust, handle_explain_cooldown_save,
     show_chain_menu,      handle_set_chain,
     show_min_words_menu,  handle_set_min_words,
 )
@@ -37,6 +38,10 @@ from handlers.admin_menu.user_management_menu import (
     show_user_mgmt_menu,
     handle_reset_chat, handle_reset_chat_confirm,
     handle_reset_user,  handle_view_summary,
+)
+from handlers.admin_menu.untouchables_menu import (
+    show_untouchables_menu,
+    handle_untouchable_remove,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,6 +117,11 @@ async def route_callback(
         await show_chain_menu(update, context, settings, lang)
         return
 
+    if data == CB.MENU_EXPLAIN_COOLDOWN:
+        await query.answer()
+        await show_explain_cooldown_menu(update, context, settings, lang)
+        return
+
     if data == CB.MENU_MIN_WORDS:
         await query.answer()
         await show_min_words_menu(update, context, settings, lang)
@@ -120,6 +130,11 @@ async def route_callback(
     if data == CB.MENU_USER_MGMT:
         await query.answer()
         await show_user_mgmt_menu(update, context, settings, lang)
+        return
+
+    if data == CB.MENU_UNTOUCHABLES:
+        await query.answer()
+        await show_untouchables_menu(update, context, settings, lang)
         return
 
     # --- Toxicity: set value ---
@@ -155,6 +170,15 @@ async def route_callback(
         await handle_set_min_words(update, context, value, settings, lang)
         return
 
+    # --- Explain cooldown: adjust + save ---
+    if data in (CB.EXPLAIN_CD_DOWN, CB.EXPLAIN_CD_UP):
+        await handle_explain_cooldown_adjust(update, context, data, settings, lang)
+        return
+
+    if data == CB.EXPLAIN_CD_SAVE:
+        await handle_explain_cooldown_save(update, context, settings, lang)
+        return
+
     # --- User management: actions ---
     if data == CB.RESET_CHAT:
         await handle_reset_chat(update, context, settings, lang)
@@ -172,6 +196,11 @@ async def route_callback(
     if data.startswith(CB.PREFIX_VIEW_SUMMARY):
         user_id = int(data.replace(CB.PREFIX_VIEW_SUMMARY, ""))
         await handle_view_summary(update, context, user_id, settings, lang)
+        return
+
+    if data.startswith(CB.PREFIX_UNTOUCHABLE_REMOVE):
+        user_id = int(data.replace(CB.PREFIX_UNTOUCHABLE_REMOVE, ""))
+        await handle_untouchable_remove(update, context, user_id, settings, lang)
         return
 
     # --- Unknown callback — acknowledge silently to stop spinner ---
