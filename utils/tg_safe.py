@@ -30,11 +30,22 @@ async def send_ephemeral_text(
     delay_sec: int = 30,
 ) -> None:
     """Send an informational message and schedule auto-delete."""
-    sent = await context.bot.send_message(
-        chat_id=chat_id,
-        text=text,
-        reply_to_message_id=reply_to_message_id,
-    )
+    try:
+        sent = await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_to_message_id=reply_to_message_id,
+        )
+    except BadRequest as exc:
+        # Reply target may disappear (deleted message / channel post constraints).
+        # Fall back to a plain chat message instead of crashing the handler.
+        if reply_to_message_id and "message to be replied not found" in str(exc).lower():
+            sent = await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+            )
+        else:
+            raise
 
     context.application.create_task(
         delete_after_delay(context.bot, chat_id, sent.message_id, delay_sec=delay_sec)
