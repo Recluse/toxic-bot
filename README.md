@@ -251,7 +251,6 @@ python setup_commands.py --force
 | `/reset`           | PM + groups | Clear your personal conversation history         |
 | `/dont_touch_me`   | Groups      | Add yourself to untouchables                     |
 | `/settings`        | PM          | Open private settings menu                        |
-| `/toxicity_demo`   | PM + groups | Demo all toxicity levels                         |
 
 ### Admin (group admins only)
 
@@ -364,7 +363,7 @@ toxic-bot/
 │   ├── user_profiles.py      # User psych profiles CRUD
 │   └── untouchables.py       # Untouchable users CRUD
 ├── handlers/
-│   ├── commands_public.py    # /start /help /about /reset /dont_touch_me /toxicity_demo /toxic
+│   ├── commands_public.py    # /start /help /about /reset /dont_touch_me /toxic
 │   ├── commands_explain.py   # /explain (multimodal)
 │   ├── messages.py           # Main handler + freq/cooldown logic
 │   ├── lifecycle.py          # Join/leave + superadmin PMs

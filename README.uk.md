@@ -250,7 +250,6 @@ python setup_commands.py --force
 | `/reset`           | ЛС + групи  | Очистити свою історію розмови                      |
 | `/dont_touch_me`   | Групи       | Додати себе в недоторканні                         |
 | `/settings`        | ЛС          | Відкрити особисте меню налаштувань                 |
-| `/toxicity_demo`   | ЛС + групи  | Демо всіх рівнів токсичності                       |
 
 ### Для адміністраторів (тільки в групах)
 
@@ -363,7 +362,7 @@ toxic-bot/
 │   ├── user_profiles.py      # CRUD психологічних профілів
 │   └── untouchables.py       # CRUD недоторканних користувачів
 ├── handlers/
-│   ├── commands_public.py    # /start /help /about /reset /dont_touch_me /toxicity_demo /toxic
+│   ├── commands_public.py    # /start /help /about /reset /dont_touch_me /toxic
 │   ├── commands_explain.py   # /explain (мультимодальний)
 │   ├── messages.py           # Основний хендлер + freq/cooldown логіка
 │   ├── lifecycle.py          # Вступ/вихід + PM суперадміна

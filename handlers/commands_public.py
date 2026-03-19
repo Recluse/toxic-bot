@@ -6,7 +6,6 @@ Commands:
     /help          — Short in-group, full in DMs
     /about         — Current chat personality summary
     /reset         — Clear caller's own history
-    /toxicity_demo — Show all 5 toxicity levels on a sample input
     /toxic         — Admin-only: force bot to reply to a specific message (reply to use)
 """
 
@@ -20,10 +19,7 @@ import db.chat_settings as settings_db
 import db.history as history_db
 import db.untouchables as untouchables_db
 from ai.responder import get_reply
-from ai.prompts import get_system_prompt
-from ai.client import groq_client
 from i18n import get_text
-from config import config
 from handlers.language_select import send_language_picker
 from utils.admin_check import is_chat_admin
 from utils.rate_limiter import check_and_set_toxic
@@ -32,10 +28,6 @@ from utils.tg_sender import resolve_message_actor
 from utils.tg_safe import send_ephemeral_text
 
 logger = logging.getLogger(__name__)
-
-# Sample question used for /toxicity_demo — deliberately mild so the
-# contrast between levels is clear and funny
-_DEMO_QUESTION = "I think I'm pretty smart."
 
 
 async def _maybe_delete_command(update: Update) -> None:
@@ -126,52 +118,6 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     deleted = await history_db.delete_for_user(chat_id, user_id)
     key = "reset_done" if deleted > 0 else "reset_no_history"
     await update.message.reply_text(get_text(key, lang))
-
-    await _maybe_delete_command(update)
-
-
-async def cmd_toxicity_demo(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    """
-    /toxicity_demo — Run the demo question through all five toxicity levels
-    and send the results as a single formatted message.
-
-    Each level gets its own API call so the responses are genuinely different.
-    A typing action is shown while all calls are in-flight.
-    """
-    chat_id = update.effective_chat.id
-
-    settings = await settings_db.get_or_create(chat_id)
-    lang     = settings["lang"]
-
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-
-    header = get_text("demo_header", lang)
-    parts  = [header]
-
-    for level in range(1, 6):
-        level_name    = get_text(f"level_name_{level}", lang)
-        label         = get_text("demo_level_label", lang, n=level, name=level_name)
-        system_prompt = get_system_prompt(level=level, lang=lang)
-
-        response = await groq_client.chat.completions.create(
-            model=config.groq.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": _DEMO_QUESTION},
-            ],
-            temperature=config.groq.temperature,
-            max_tokens=300,
-        )
-        reply = response.choices[0].message.content.strip()
-        parts.append(f"{label}{reply}")
-
-    await update.message.reply_text(
-        "\n".join(parts),
-        parse_mode=ParseMode.HTML,
-    )
 
     await _maybe_delete_command(update)
 
