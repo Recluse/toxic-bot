@@ -32,6 +32,7 @@ import db.chat_settings as settings_db
 import db.metrics as metrics_db
 from i18n import get_text
 from utils.rate_limiter import check_and_set_explain, check_pm_explain_quota, check_pm_media_quota
+from utils.tg_sender import resolve_message_actor
 from utils.tg_safe import send_ephemeral_text
 
 logger = logging.getLogger(__name__)
@@ -43,8 +44,14 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat    = update.effective_chat
     user    = update.effective_user
 
-    if not message or not chat or not user:
+    if not message or not chat:
         return
+
+    actor_id, actor_name, _ = resolve_message_actor(message, user)
+    if actor_id is None:
+        return
+    if not actor_name:
+        actor_name = "user"
 
     settings    = await settings_db.get_or_create(chat.id)
     lang        = settings["lang"]
@@ -54,7 +61,7 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if not is_pm:
         explain_cd_min = int(settings.get("explain_cooldown_min", 10))
-        if not check_and_set_explain(chat.id, user.id, explain_cd_min * 60):
+        if not check_and_set_explain(chat.id, actor_id, explain_cd_min * 60):
             await send_ephemeral_text(
                 context,
                 chat_id=chat.id,
@@ -64,7 +71,7 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
     else:
-        if not check_pm_explain_quota(chat.id, user.id):
+        if not check_pm_explain_quota(chat.id, actor_id):
             await message.reply_text(get_text("pm_explain_hour_limit", lang))
             return
 
@@ -97,7 +104,7 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     image_base64: str | None = None
 
     if target.voice or target.audio:
-        if is_pm and not check_pm_media_quota(chat.id, user.id):
+        if is_pm and not check_pm_media_quota(chat.id, actor_id):
             await message.reply_text(get_text("pm_media_hour_limit", lang))
             return
 
@@ -112,7 +119,7 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
 
     elif target.photo:
-        if is_pm and not check_pm_media_quota(chat.id, user.id):
+        if is_pm and not check_pm_media_quota(chat.id, actor_id):
             await message.reply_text(get_text("pm_media_hour_limit", lang))
             return
 
@@ -133,11 +140,30 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         content_text = f"Explain this image. Respond strictly in language code: {lang}."
         logger.debug("explain: injected language prompt for image chat_id=%d lang=%s", chat.id, lang)
 
+    explain_target_type = (
+        "photo" if image_base64 else
+        "voice" if (target.voice or target.audio) else
+        "text"
+    )
+
+    target_user_id, target_username, _ = resolve_message_actor(target, target.from_user)
+    if target_user_id is None:
+        target_user_id = actor_id
+    if not target_username:
+        target_username = actor_name
+
+    logger.info(
+        "LLM request mode=explain chat_id=%d user_id=%d reason=explain_command target=%s",
+        chat.id,
+        target_user_id,
+        explain_target_type,
+    )
+
     try:
         reply = await get_reply(
             chat_id=chat.id,
-            user_id=user.id,
-            username=user.username or user.full_name,
+            user_id=target_user_id,
+            username=target_username,
             user_text=content_text or "",
             toxicity_level=0,  # ignored in EXPLAIN mode
             lang=lang,

@@ -44,6 +44,7 @@ from db.chats import upsert_chat
 from i18n import get_text
 from utils.rate_limiter import check_and_set, check_pm_media_quota, check_pm_text_quota
 from utils.reply_chain import collect_chain
+from utils.tg_sender import resolve_message_actor
 
 logger = logging.getLogger(__name__)
 
@@ -63,13 +64,21 @@ async def handle_message(
     user    = update.effective_user
     chat    = update.effective_chat
 
-    if not message or not user or not chat:
+    if not message or not chat:
         return
 
-    user_id  = user.id
-    chat_id  = chat.id
-    username = user.username or user.full_name
-    is_pm    = chat.type == ChatType.PRIVATE
+    chat_id = chat.id
+    is_pm   = chat.type == ChatType.PRIVATE
+
+    user_id, username, is_channel_sender = resolve_message_actor(message, user)
+    if user_id is None:
+        return
+
+    # Ignore ordinary bot/service users, but keep channel-origin messages
+    # (sender_chat) so each channel gets a distinct identity in history.
+    if (not is_channel_sender) and user and (user_id == 777000 or user.is_bot):
+        logger.debug("Ignored service/bot sender chat_id=%d user_id=%d", chat_id, user_id)
+        return
 
     # --- Load settings and auto-register chat ---
     settings = await settings_db.get_or_create(chat_id)
@@ -158,7 +167,67 @@ async def handle_message(
         logger.debug("Too short (%d < %d) — ignored chat_id=%d", word_count, min_words, chat_id)
         return
 
-    # Update the user's profile in the background (if the message is not noise).
+    bot_id          = context.bot.id
+    is_reply_to_bot = (
+        message.reply_to_message is not None
+        and message.reply_to_message.from_user is not None
+        and message.reply_to_message.from_user.id == bot_id
+    )
+    is_any_reply = message.reply_to_message is not None
+    is_forwarded = any([
+        getattr(message, "forward_origin", None),
+        getattr(message, "forward_from", None),
+        getattr(message, "forward_from_chat", None),
+        getattr(message, "forward_sender_name", None),
+        getattr(message, "forward_date", None),
+    ])
+    is_linked_channel_post = bool(getattr(message, "is_automatic_forward", False))
+    is_forward_like = is_forwarded or is_linked_channel_post
+
+    # --- Collect reply chain context ---
+    extra_context: list[dict] = []
+    if is_any_reply:
+        extra_context = await collect_chain(message, bot_id, max_depth=chain_depth)
+
+    should_reply = False
+    llm_reason: str | None = None
+
+    # --- In PM: always reply ---
+    if is_pm:
+        should_reply = True
+        llm_reason = "pm_always_reply"
+
+    # --- 2. Direct reply to bot → always reply if cooldown allows ---
+    elif is_reply_to_bot:
+        if check_and_set(chat_id, user_id, cooldown_sec):
+            should_reply = True
+            llm_reason = "direct_reply_to_bot_cooldown_passed"
+            logger.debug("Direct reply, cooldown passed chat_id=%d user_id=%d", chat_id, user_id)
+        else:
+            logger.debug("Cooldown blocked chat_id=%d user_id=%d", chat_id, user_id)
+            return
+
+    # --- 3. Frequency gate for non-bot-reply group messages ---
+    else:
+        if is_forward_like:
+            logger.debug(
+                "Skipped random reply for forward/channel post chat_id=%d user_id=%d",
+                chat_id,
+                user_id,
+            )
+            return
+        _msg_counters[chat_id] += 1
+        threshold = random.randint(freq_min, freq_max)
+        if _msg_counters[chat_id] >= threshold:
+            _msg_counters[chat_id] = 0
+            should_reply           = True
+            llm_reason = f"frequency_gate_passed(threshold={threshold})"
+            logger.debug("Frequency gate passed threshold=%d chat_id=%d", threshold, chat_id)
+
+    if not should_reply:
+        return
+
+    # Update the user's profile only for messages that passed reply gating.
     if text and not history_db.is_noise(text):
         existing_summary = await history_db.get_user_summary(user_id)
         try:
@@ -182,48 +251,18 @@ async def handle_message(
                 )
             )
 
-    bot_id          = context.bot.id
-    is_reply_to_bot = (
-        message.reply_to_message is not None
-        and message.reply_to_message.from_user is not None
-        and message.reply_to_message.from_user.id == bot_id
-    )
-    is_any_reply = message.reply_to_message is not None
-
-    # --- Collect reply chain context ---
-    extra_context: list[dict] = []
-    if is_any_reply:
-        extra_context = await collect_chain(message, bot_id, max_depth=chain_depth)
-
-    should_reply = False
-
-    # --- In PM: always reply ---
-    if is_pm:
-        should_reply = True
-
-    # --- 2. Direct reply to bot → always reply if cooldown allows ---
-    elif is_reply_to_bot:
-        if check_and_set(chat_id, user_id, cooldown_sec):
-            should_reply = True
-            logger.debug("Direct reply, cooldown passed chat_id=%d user_id=%d", chat_id, user_id)
-        else:
-            logger.debug("Cooldown blocked chat_id=%d user_id=%d", chat_id, user_id)
-            return
-
-    # --- 3. Frequency gate for non-bot-reply group messages ---
-    else:
-        _msg_counters[chat_id] += 1
-        threshold = random.randint(freq_min, freq_max)
-        if _msg_counters[chat_id] >= threshold:
-            _msg_counters[chat_id] = 0
-            should_reply           = True
-            logger.debug("Frequency gate passed threshold=%d chat_id=%d", threshold, chat_id)
-
-    if not should_reply:
-        return
-
     # --- Fire the LLM call ---
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    logger.info(
+        "LLM request mode=chat chat_id=%d user_id=%d reason=%s type=%s channel_sender=%s forward_like=%s",
+        chat_id,
+        user_id,
+        llm_reason or "unknown",
+        "voice" if message.voice else "photo" if message.photo else "text",
+        is_channel_sender,
+        is_forward_like,
+    )
 
     # If the selected message is a photo, describe it now (post-frequency gating).
     if photo_file_id:

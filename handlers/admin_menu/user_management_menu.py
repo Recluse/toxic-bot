@@ -82,7 +82,10 @@ async def show_user_mgmt_menu(
         ])
     else:
         for user in users[:10]:
-            display = f"@{user['username']}" if user.get("username") else f"id:{user['user_id']}"
+            if user.get("username"):
+                display = f"@{str(user['username']).lstrip('@')}"
+            else:
+                display = f"id:{user['user_id']}"
             updated_at = user.get("updated_at")
             if updated_at:
                 # Show last activity date to help admins choose which profiles to inspect.

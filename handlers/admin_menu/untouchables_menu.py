@@ -32,7 +32,10 @@ async def show_untouchables_menu(
         ])
     else:
         for user in users[:25]:
-            name = f"@{user['username']}" if user.get("username") else f"id:{user['user_id']}"
+            if user.get("username"):
+                name = f"@{str(user['username']).lstrip('@')}"
+            else:
+                name = f"id:{user['user_id']}"
             rows.append([
                 InlineKeyboardButton(
                     f"✕ {name}",

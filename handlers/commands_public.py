@@ -28,6 +28,7 @@ from handlers.language_select import send_language_picker
 from utils.admin_check import is_chat_admin
 from utils.rate_limiter import check_and_set_toxic
 from utils.reply_chain import collect_chain
+from utils.tg_sender import resolve_message_actor
 from utils.tg_safe import send_ephemeral_text
 
 logger = logging.getLogger(__name__)
@@ -184,26 +185,36 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     The /toxic command message itself is deleted after triggering.
     Non-admins: command is silently deleted.
     """
-    chat_id  = update.effective_chat.id
+    message = update.effective_message
+    chat    = update.effective_chat
+
+    if not message or not chat:
+        return
+
+    caller_user_id, _, _ = resolve_message_actor(message, update.effective_user)
+    if caller_user_id is None:
+        return
+
+    chat_id  = chat.id
     settings = await settings_db.get_or_create(chat_id)
     lang     = settings["lang"]
 
-    if not check_and_set_toxic(chat_id, update.effective_user.id, cooldown_sec=300):
+    if not check_and_set_toxic(chat_id, caller_user_id, cooldown_sec=300):
         await send_ephemeral_text(
             context,
             chat_id=chat_id,
             text=get_text("toxic_cooldown_active", lang),
-            reply_to_message_id=update.effective_message.message_id,
+            reply_to_message_id=message.message_id,
             delay_sec=30,
         )
         return
 
-    if not update.message.reply_to_message:
+    if not message.reply_to_message:
         await send_ephemeral_text(
             context,
             chat_id=chat_id,
             text=get_text("toxic_no_reply", lang),
-            reply_to_message_id=update.effective_message.message_id,
+            reply_to_message_id=message.message_id,
             delay_sec=30,
         )
         return
@@ -211,12 +222,12 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Admin check — silently delete if caller is not an admin
     if not await is_chat_admin(update):
         try:
-            await update.message.delete()
+            await message.delete()
         except Exception:
             pass
         return
 
-    target = update.message.reply_to_message
+    target = message.reply_to_message
     text   = (target.text or target.caption or "").strip()
 
     # --- Handle photo target ---
@@ -232,7 +243,7 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 text = f"[user sent a photo with caption: {text}]"
         except Exception as exc:
             logger.error("cmd_toxic: failed to download photo chat_id=%d: %s", chat_id, exc)
-            await update.message.reply_text(get_text("error_generic", lang))
+            await message.reply_text(get_text("error_generic", lang))
             return
 
     elif not text:
@@ -240,23 +251,22 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             context,
             chat_id=chat_id,
             text=get_text("toxic_no_text", lang),
-            reply_to_message_id=update.effective_message.message_id,
+            reply_to_message_id=message.message_id,
             delay_sec=30,
         )
         return
 
     # Delete the /toxic command message to keep the chat clean
     try:
-        await update.message.delete()
+        await message.delete()
     except Exception:
         pass
 
-    target_user     = target.from_user
-    target_user_id  = target_user.id if target_user else update.effective_user.id
-    target_username = (
-        target_user.username or target_user.full_name
-        if target_user else "user"
-    )
+    target_user_id, target_username, _ = resolve_message_actor(target, target.from_user)
+    if target_user_id is None:
+        target_user_id = caller_user_id
+    if not target_username:
+        target_username = "user"
 
     extra_context = await collect_chain(
         target,
@@ -287,6 +297,13 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
+    logger.info(
+        "LLM request mode=chat chat_id=%d user_id=%d reason=admin_toxic_command target_message_id=%d",
+        chat_id,
+        target_user_id,
+        target.message_id,
+    )
+
     try:
         reply = await get_reply(
             chat_id=chat_id,
@@ -315,10 +332,9 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_dont_touch_me(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Add caller to untouchable list for this group chat."""
     chat = update.effective_chat
-    user = update.effective_user
     message = update.effective_message
 
-    if not chat or not user or not message:
+    if not chat or not message:
         return
 
     settings = await settings_db.get_or_create(chat.id)
@@ -328,8 +344,11 @@ async def cmd_dont_touch_me(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await message.reply_text(get_text("group_only", lang))
         return
 
-    username = user.username or user.full_name
-    inserted = await untouchables_db.add(chat.id, user.id, username)
+    actor_id, actor_name, _ = resolve_message_actor(message, update.effective_user)
+    if actor_id is None:
+        return
+
+    inserted = await untouchables_db.add(chat.id, actor_id, actor_name)
 
     if inserted:
         await send_ephemeral_text(
