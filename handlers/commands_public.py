@@ -22,6 +22,12 @@ from ai.responder import get_reply
 from i18n import get_text
 from handlers.language_select import send_language_picker
 from utils.admin_check import is_chat_admin
+from utils.prompt_injection_guard import (
+    build_injection_payload,
+    detect_prompt_injection,
+    log_injection_event,
+    notify_superadmins_injection_event,
+)
 from utils.rate_limiter import check_and_set_toxic
 from utils.reply_chain import collect_chain
 from utils.tg_sender import resolve_message_actor
@@ -175,6 +181,58 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     target = message.reply_to_message
     text   = (target.text or target.caption or "").strip()
+
+    detection = detect_prompt_injection(text)
+    if detection.blocked:
+        target_user_id, target_username, target_is_channel_sender = resolve_message_actor(
+            target,
+            target.from_user,
+        )
+        payload = build_injection_payload(
+            chat=chat,
+            actor_id=target_user_id,
+            actor_username=getattr(target.from_user, "username", None),
+            actor_full_name=(
+                getattr(target.from_user, "full_name", None)
+                if target.from_user
+                else target_username
+            ),
+            actor_is_channel_sender=target_is_channel_sender,
+            message_text=text,
+            source=detection.source or "unknown",
+            reason=detection.reason or "unknown",
+        )
+
+        log_injection_event(
+            chat=chat,
+            actor_id=target_user_id,
+            actor_username=getattr(target.from_user, "username", None),
+            actor_full_name=(
+                getattr(target.from_user, "full_name", None)
+                if target.from_user
+                else target_username
+            ),
+            actor_is_channel_sender=target_is_channel_sender,
+            message_text=text,
+            source=detection.source or "unknown",
+            reason=detection.reason or "unknown",
+        )
+        await notify_superadmins_injection_event(payload, context.bot)
+
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=get_text("prompt_injection_blocked", lang),
+            reply_parameters=ReplyParameters(
+                message_id=target.message_id,
+                chat_id=chat_id,
+            ),
+        )
+        return
 
     # --- Handle photo target ---
     image_base64: str | None = None

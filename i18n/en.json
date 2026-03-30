@@ -107,6 +107,7 @@
   "pm_explain_hour_limit":   "In PM, /explain is limited to 5 requests per hour.",
   "pm_text_hour_limit":      "In PM, text messages are limited to 10 per hour.",
   "pm_media_hour_limit":     "In PM, media (photo/voice/audio) is limited to 5 per hour.",
+  "prompt_injection_blocked": "How naive. Go fuck yourself!",
   "explain_transcribe_failed": "Could not transcribe voice message",
   "explain_empty": "Nothing to explain here",
   "explain_help": "<b>/explain</b> analyzes anything without regard for self-esteem.\n\nHow to use:\n• <code>/explain text</code> — get analysis\n• Reply to message with /explain — it will analyze it\n• Works with text, images, and voice messages",

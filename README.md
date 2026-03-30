@@ -36,6 +36,13 @@ precision — powered by Groq LLM via a Cloudflare AI Gateway.
 - Conversation history with PostgreSQL-backed memory
 - Background summarisation to keep context window lean
 - Multilingual interface: English, Russian, Ukrainian
+- Adaptive response language: if a message is clearly in another single language, the bot replies in that language
+- Prompt-injection prefilter before any LLM call (`<system>`, `</system>`, `<\system>`, plus `ai-injection-guard` checks)
+- Context sanitization before LLM call: history and reply-chain entries are filtered for injection and dropped if unsafe
+- Tag guard also covers admin-tag variants (`<admin>`, `</admin>`, `<\admin>`) including regex/escaped forms
+- Dedicated injection event log: `logs/prompt_injection_events.log` with full chat/user/message payload
+- Superadmin PM alerts on every injection trigger with source and detailed reason
+- Injection-like random group messages are silently dropped; explicit reactions remain in PM, commands, and direct replies to the bot
 - Auto-registers chats on first message — no manual setup needed
 - Superadmin PM notifications and broadcast system
 - Cloudflare AI Gateway integration for observability and rate limiting

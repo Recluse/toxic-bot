@@ -12,8 +12,43 @@ from ai.modes import BotMode
 from ai.prompts import get_system_prompt, get_explain_prompt
 from ai.vision import build_vision_message
 import db.history as history_db
+from utils.prompt_injection_guard import detect_prompt_injection
 
 logger = logging.getLogger(__name__)
+
+
+def _filter_context_messages(
+    messages: list[dict],
+    *,
+    source: str,
+    chat_id: int,
+    user_id: int,
+) -> list[dict]:
+    """Drop unsafe context entries before sending context to the LLM."""
+    safe: list[dict] = []
+
+    for idx, msg in enumerate(messages):
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            safe.append(msg)
+            continue
+
+        detection = detect_prompt_injection(content, strict_context=True)
+        if detection.blocked:
+            logger.warning(
+                "Dropped unsafe context source=%s chat_id=%d user_id=%d idx=%d detector=%s reason=%s",
+                source,
+                chat_id,
+                user_id,
+                idx,
+                detection.source,
+                detection.reason,
+            )
+            continue
+
+        safe.append(msg)
+
+    return safe
 
 
 async def get_reply(
@@ -73,6 +108,19 @@ async def _chat_reply(
     history       = await history_db.get_recent_for_user(user_id, chat_id)
     user_summary  = await history_db.get_user_summary(user_id)
     system_prompt = get_system_prompt(toxicity_level, lang, user_summary)
+
+    history = _filter_context_messages(
+        history,
+        source="history",
+        chat_id=chat_id,
+        user_id=user_id,
+    )
+    extra_context = _filter_context_messages(
+        extra_context,
+        source="reply_chain",
+        chat_id=chat_id,
+        user_id=user_id,
+    )
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)

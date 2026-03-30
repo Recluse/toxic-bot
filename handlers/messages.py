@@ -43,6 +43,12 @@ from ai.vision import build_vision_message, get_image_base64
 from db.chats import upsert_chat
 from i18n import get_text
 from utils.rate_limiter import check_and_set, check_pm_media_quota, check_pm_text_quota
+from utils.prompt_injection_guard import (
+    build_injection_payload,
+    detect_prompt_injection,
+    log_injection_event,
+    notify_superadmins_injection_event,
+)
 from utils.reply_chain import collect_chain
 from utils.tg_sender import resolve_message_actor
 
@@ -155,6 +161,55 @@ async def handle_message(
     if not text and not photo_file_id:
         return
 
+    bot_id          = context.bot.id
+    is_reply_to_bot = (
+        message.reply_to_message is not None
+        and message.reply_to_message.from_user is not None
+        and message.reply_to_message.from_user.id == bot_id
+    )
+
+    detection = detect_prompt_injection(text)
+    if detection.blocked:
+        payload = build_injection_payload(
+            chat=chat,
+            actor_id=user_id,
+            actor_username=getattr(user, "username", None),
+            actor_full_name=(getattr(user, "full_name", None) if user else username),
+            actor_is_channel_sender=is_channel_sender,
+            message_text=text,
+            source=detection.source or "unknown",
+            reason=detection.reason or "unknown",
+        )
+
+        log_injection_event(
+            chat=chat,
+            actor_id=user_id,
+            actor_username=getattr(user, "username", None),
+            actor_full_name=(getattr(user, "full_name", None) if user else username),
+            actor_is_channel_sender=is_channel_sender,
+            message_text=text,
+            source=detection.source or "unknown",
+            reason=detection.reason or "unknown",
+        )
+        await notify_superadmins_injection_event(payload, context.bot)
+
+        # In groups, only react when user directly replies to the bot.
+        # For random chat messages, silently drop here.
+        if is_pm or is_reply_to_bot:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=get_text("prompt_injection_blocked", lang),
+                reply_to_message_id=message.message_id,
+            )
+        else:
+            logger.debug(
+                "Ignored prompt-injection-like text in group message chat_id=%d user_id=%d source=%s",
+                chat_id,
+                user_id,
+                detection.source,
+            )
+        return
+
     # --- 1. Word count gate (skip in PM — PM always responds) ---
     word_count = len(text.split())
     logger.info(
@@ -167,12 +222,6 @@ async def handle_message(
         logger.debug("Too short (%d < %d) — ignored chat_id=%d", word_count, min_words, chat_id)
         return
 
-    bot_id          = context.bot.id
-    is_reply_to_bot = (
-        message.reply_to_message is not None
-        and message.reply_to_message.from_user is not None
-        and message.reply_to_message.from_user.id == bot_id
-    )
     is_any_reply = message.reply_to_message is not None
     is_forwarded = any([
         getattr(message, "forward_origin", None),

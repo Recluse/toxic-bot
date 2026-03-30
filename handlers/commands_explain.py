@@ -31,6 +31,12 @@ from ai.vision import get_image_base64
 import db.chat_settings as settings_db
 import db.metrics as metrics_db
 from i18n import get_text
+from utils.prompt_injection_guard import (
+    build_injection_payload,
+    detect_prompt_injection,
+    log_injection_event,
+    notify_superadmins_injection_event,
+)
 from utils.rate_limiter import check_and_set_explain, check_pm_explain_quota, check_pm_media_quota
 from utils.tg_sender import resolve_message_actor
 from utils.tg_safe import send_ephemeral_text
@@ -129,6 +135,58 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     elif not content_text:
         await message.reply_text(get_text("explain_empty", lang))
+        return
+
+    detection = detect_prompt_injection(content_text)
+    if detection.blocked:
+        target_user_id, target_username, target_is_channel_sender = resolve_message_actor(
+            target,
+            target.from_user,
+        )
+        payload = build_injection_payload(
+            chat=chat,
+            actor_id=target_user_id,
+            actor_username=getattr(target.from_user, "username", None),
+            actor_full_name=(
+                getattr(target.from_user, "full_name", None)
+                if target.from_user
+                else target_username
+            ),
+            actor_is_channel_sender=target_is_channel_sender,
+            message_text=content_text,
+            source=detection.source or "unknown",
+            reason=detection.reason or "unknown",
+        )
+
+        log_injection_event(
+            chat=chat,
+            actor_id=target_user_id,
+            actor_username=getattr(target.from_user, "username", None),
+            actor_full_name=(
+                getattr(target.from_user, "full_name", None)
+                if target.from_user
+                else target_username
+            ),
+            actor_is_channel_sender=target_is_channel_sender,
+            message_text=content_text,
+            source=detection.source or "unknown",
+            reason=detection.reason or "unknown",
+        )
+        await notify_superadmins_injection_event(payload, context.bot)
+
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=get_text("prompt_injection_blocked", lang),
+            reply_parameters=ReplyParameters(
+                message_id=target.message_id,
+                chat_id=chat.id,
+            ),
+        )
+        if chat.type != ChatType.PRIVATE:
+            try:
+                await message.delete()
+            except Exception:
+                pass
         return
 
     await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
