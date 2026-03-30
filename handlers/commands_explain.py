@@ -20,7 +20,7 @@ import re
 import html
 
 from telegram import Update, ReplyParameters
-from telegram.constants import ParseMode, ChatAction, ChatType
+from telegram.constants import ParseMode, ChatAction, ChatType, MessageEntityType
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
@@ -44,6 +44,25 @@ from utils.tg_safe import send_ephemeral_text
 logger = logging.getLogger(__name__)
 
 
+def _has_explicit_explain_command(message) -> bool:
+    """Return True only when /explain is an explicit bot command at offset 0."""
+    full_text = (message.text or message.caption or "")
+    if not full_text:
+        return False
+
+    entities = message.entities or message.caption_entities or []
+    for ent in entities:
+        if ent.type != MessageEntityType.BOT_COMMAND or ent.offset != 0:
+            continue
+
+        raw_cmd = full_text[ent.offset: ent.offset + ent.length]
+        cmd = raw_cmd.split("@", 1)[0].lower()
+        if cmd == "/explain":
+            return True
+
+    return False
+
+
 async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the /explain command."""
     message = update.effective_message
@@ -51,6 +70,14 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user    = update.effective_user
 
     if not message or not chat:
+        return
+
+    if not _has_explicit_explain_command(message):
+        logger.warning(
+            "Rejected unexpected cmd_explain invocation chat_id=%s message_id=%s",
+            getattr(chat, "id", None),
+            getattr(message, "message_id", None),
+        )
         return
 
     actor_id, actor_name, _ = resolve_message_actor(message, user)
