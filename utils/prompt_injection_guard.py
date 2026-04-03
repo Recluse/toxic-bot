@@ -30,6 +30,8 @@ _SYSTEM_TAG_RE = re.compile(r"<\s*(?:/|\\)?\s*system\b[^>]*>", re.IGNORECASE)
 _SYSTEM_TAG_ESCAPED_RE = re.compile(r"&lt;\s*(?:/|\\)?\s*system\b.*?&gt;", re.IGNORECASE)
 _ADMIN_TAG_RE = re.compile(r"<\s*(?:/|\\)?\s*admin\b[^>]*>", re.IGNORECASE)
 _ADMIN_TAG_ESCAPED_RE = re.compile(r"&lt;\s*(?:/|\\)?\s*admin\b.*?&gt;", re.IGNORECASE)
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_BASE64_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{24,}={0,2}(?![A-Za-z0-9+/=])")
 _CONTEXT_HINT_RE = re.compile(
     r"ignore\s+previous\s+instructions|system\s+prompt|developer\s+mode|dan\b|"
     r"reveal\s+instructions|repeat\s+everything\s+above|jailbreak",
@@ -79,6 +81,42 @@ def _tag_matches(text: str) -> list[str]:
     return deduped
 
 
+def _result_matches(result: Any) -> list[dict[str, Any]]:
+    return [m for m in (getattr(result, "matches", []) or []) if isinstance(m, dict)]
+
+
+def _is_url_false_positive(text: str, result: Any) -> bool:
+    """Treat plain URLs as safe when the scanner only reports base64 payload noise."""
+    if not _URL_RE.search(text):
+        return False
+
+    matches = _result_matches(result)
+    if not matches:
+        return False
+
+    match_names = {m.get("name") for m in matches if m.get("name")}
+    if match_names != {"encoding_base64_payload"}:
+        return False
+
+    # Remove URLs first. If no standalone base64-like token remains, this is
+    # the scanner misreading URL path segments as encoded payload.
+    text_without_urls = _URL_RE.sub(" ", text)
+    return _BASE64_TOKEN_RE.search(text_without_urls) is None
+
+
+def _format_result_reason(result: Any) -> str:
+    matches = _result_matches(result)
+    pretty_matches = "; ".join(
+        f"{m.get('name')}[{m.get('category')},w={m.get('weight')}]"
+        for m in matches[:12]
+    )
+    return (
+        f"severity={getattr(result, 'severity', 'UNKNOWN')} "
+        f"risk_score={getattr(result, 'risk_score', 'UNKNOWN')} "
+        f"matches={pretty_matches or 'none'}"
+    )
+
+
 def contains_prompt_injection_markup(text: str | None) -> bool:
     """Return True when text contains system-tag injection markers."""
     if not text:
@@ -112,6 +150,13 @@ def detect_prompt_injection(
         logging.getLogger(__name__).warning("ai-injection-guard scan failed: %s", exc)
         return InjectionDetectionResult(blocked=False)
 
+    if _is_url_false_positive(text, result):
+        logging.getLogger(__name__).debug(
+            "Suppressed ai-injection-guard URL false positive: %s",
+            _format_result_reason(result),
+        )
+        return InjectionDetectionResult(blocked=False)
+
     if result.is_safe:
         if strict_context and _context_scanner is not None:
             try:
@@ -121,20 +166,17 @@ def detect_prompt_injection(
                 context_result = None
 
             if context_result is not None and not context_result.is_safe:
-                matches = getattr(context_result, "matches", []) or []
-                pretty_matches = "; ".join(
-                    f"{m.get('name')}[{m.get('category')},w={m.get('weight')}]"
-                    for m in matches[:12]
-                    if isinstance(m, dict)
-                )
+                if _is_url_false_positive(text, context_result):
+                    logging.getLogger(__name__).debug(
+                        "Suppressed context ai-injection-guard URL false positive: %s",
+                        _format_result_reason(context_result),
+                    )
+                    return InjectionDetectionResult(blocked=False)
+
                 return InjectionDetectionResult(
                     blocked=True,
                     source="ai-injection-guard-context",
-                    reason=(
-                        f"severity={getattr(context_result, 'severity', 'UNKNOWN')} "
-                        f"risk_score={getattr(context_result, 'risk_score', 'UNKNOWN')} "
-                        f"matches={pretty_matches or 'none'}"
-                    ),
+                    reason=_format_result_reason(context_result),
                 )
 
         if strict_context and _CONTEXT_HINT_RE.search(text):
@@ -146,21 +188,10 @@ def detect_prompt_injection(
 
         return InjectionDetectionResult(blocked=False)
 
-    matches = getattr(result, "matches", []) or []
-    pretty_matches = "; ".join(
-        f"{m.get('name')}[{m.get('category')},w={m.get('weight')}]"
-        for m in matches[:12]
-        if isinstance(m, dict)
-    )
-
     return InjectionDetectionResult(
         blocked=True,
         source="ai-injection-guard",
-        reason=(
-            f"severity={getattr(result, 'severity', 'UNKNOWN')} "
-            f"risk_score={getattr(result, 'risk_score', 'UNKNOWN')} "
-            f"matches={pretty_matches or 'none'}"
-        ),
+        reason=_format_result_reason(result),
     )
 
 
