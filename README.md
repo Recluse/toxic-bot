@@ -30,6 +30,7 @@ precision — powered by Groq LLM via a Cloudflare AI Gateway.
 ## Features
 
 - Responds in group chats with configurable frequency and toxicity level
+- Random auto-replies are limited to fresh messages, so the bot does not necropost into old threads
 - Detects logical fallacies and psychological weakness in messages
 - Replies with sharp, wit-first sarcasm — never dumb insults
 - Per-chat settings managed via inline keyboard (admins only)

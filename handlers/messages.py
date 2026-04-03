@@ -21,6 +21,7 @@ photo       → vision model → description → normal pipeline
 """
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 import random
 from collections import defaultdict
@@ -57,6 +58,22 @@ logger = logging.getLogger(__name__)
 # Per-chat message counters for frequency gating.
 # Resets to 0 each time the bot decides to reply.
 _msg_counters: dict[int, int] = defaultdict(int)
+
+# Random auto-replies are allowed only for fresh messages to avoid necroposting
+# old threads after reconnects/restarts or delayed updates.
+_RANDOM_REPLY_MAX_AGE_SEC = 120
+
+
+def _message_age_seconds(message) -> float:
+    msg_date = getattr(message, "date", None)
+    if msg_date is None:
+        return 0.0
+
+    if msg_date.tzinfo is None:
+        msg_date = msg_date.replace(tzinfo=timezone.utc)
+
+    age = (datetime.now(timezone.utc) - msg_date.astimezone(timezone.utc)).total_seconds()
+    return max(age, 0.0)
 
 async def handle_message(
     update: Update,
@@ -265,6 +282,18 @@ async def handle_message(
                 user_id,
             )
             return
+
+        age_sec = _message_age_seconds(message)
+        if age_sec > _RANDOM_REPLY_MAX_AGE_SEC:
+            logger.debug(
+                "Skipped random reply for stale message chat_id=%d user_id=%d age_sec=%.1f max_age=%d",
+                chat_id,
+                user_id,
+                age_sec,
+                _RANDOM_REPLY_MAX_AGE_SEC,
+            )
+            return
+
         _msg_counters[chat_id] += 1
         threshold = random.randint(freq_min, freq_max)
         if _msg_counters[chat_id] >= threshold:
