@@ -61,6 +61,106 @@ async def list_chats(active_only: bool = True) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def list_chats_with_stats(active_only: bool = True) -> list[dict]:
+    """Return chats enriched with per-chat activity, history, and settings data."""
+    pool = get_pool()
+    query = """
+    SELECT
+        c.chat_id,
+        c.title,
+        c.username,
+        c.chat_type,
+        c.active,
+        c.joined_at,
+        cs.lang,
+        cs.toxicity_level,
+        cs.freq_min,
+        cs.freq_max,
+        cs.reply_cooldown_sec,
+        cs.explain_cooldown_min,
+        cs.reply_chain_depth,
+        cs.min_words,
+        COALESCE(hist.history_rows, 0) AS history_rows,
+        COALESCE(hist.history_user_rows, 0) AS history_user_rows,
+        COALESCE(hist.history_assistant_rows, 0) AS history_assistant_rows,
+        COALESCE(hist.distinct_users, 0) AS distinct_users,
+        hist.last_history_at,
+        COALESCE(cm.processed_text, 0) AS processed_text,
+        COALESCE(cm.processed_voice, 0) AS processed_voice,
+        COALESCE(cm.processed_image, 0) AS processed_image,
+        COALESCE(cm.processed_total, 0) AS processed_total,
+        COALESCE(cm.chat_llm_requests, 0) AS chat_llm_requests,
+        COALESCE(cm.chat_replies_sent, 0) AS chat_replies_sent,
+        COALESCE(cm.explain_commands, 0) AS explain_commands,
+        COALESCE(cm.explain_llm_requests, 0) AS explain_llm_requests,
+        COALESCE(cm.explain_replies_sent, 0) AS explain_replies_sent,
+        COALESCE(cm.toxic_commands, 0) AS toxic_commands,
+        COALESCE(cm.toxic_llm_requests, 0) AS toxic_llm_requests,
+        COALESCE(cm.toxic_replies_sent, 0) AS toxic_replies_sent,
+        COALESCE(cm.prompt_injection_blocked, 0) AS prompt_injection_blocked,
+        COALESCE(cm.prompt_injection_visible, 0) AS prompt_injection_visible,
+        COALESCE(cm.prompt_injection_silent, 0) AS prompt_injection_silent,
+        cm.last_metric_at,
+        GREATEST(
+            COALESCE(hist.last_history_at, TO_TIMESTAMP(0)),
+            COALESCE(cm.last_metric_at, TO_TIMESTAMP(0)),
+            COALESCE(c.joined_at, TO_TIMESTAMP(0))
+        ) AS last_activity_at
+    FROM chats c
+    LEFT JOIN chat_settings cs
+           ON cs.chat_id = c.chat_id
+    LEFT JOIN LATERAL (
+        SELECT
+            COUNT(*) AS history_rows,
+            COUNT(*) FILTER (WHERE role = 'user') AS history_user_rows,
+            COUNT(*) FILTER (WHERE role = 'assistant') AS history_assistant_rows,
+            COUNT(DISTINCT user_id) FILTER (WHERE user_id IS NOT NULL) AS distinct_users,
+            MAX(created_at) AS last_history_at
+        FROM message_history
+        WHERE chat_id = c.chat_id
+    ) hist ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'processed_text'), 0) AS processed_text,
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'processed_voice'), 0) AS processed_voice,
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'processed_image'), 0) AS processed_image,
+            COALESCE(SUM(value) FILTER (WHERE metric_key IN ('processed_text', 'processed_voice', 'processed_image')), 0) AS processed_total,
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'chat_llm_requests'), 0) AS chat_llm_requests,
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'chat_replies_sent'), 0) AS chat_replies_sent,
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'explain_commands'), 0) AS explain_commands,
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'explain_llm_requests'), 0) AS explain_llm_requests,
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'explain_replies_sent'), 0) AS explain_replies_sent,
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'toxic_commands'), 0) AS toxic_commands,
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'toxic_llm_requests'), 0) AS toxic_llm_requests,
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'toxic_replies_sent'), 0) AS toxic_replies_sent,
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'prompt_injection_blocked'), 0) AS prompt_injection_blocked,
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'prompt_injection_visible'), 0) AS prompt_injection_visible,
+            COALESCE(SUM(value) FILTER (WHERE metric_key = 'prompt_injection_silent'), 0) AS prompt_injection_silent,
+            MAX(updated_at) AS last_metric_at
+        FROM chat_metrics
+        WHERE chat_id = c.chat_id
+    ) cm ON TRUE
+    """
+
+    if active_only:
+        query += " WHERE c.active = TRUE"
+
+    query += """
+    ORDER BY
+        COALESCE(cm.processed_total, 0) DESC,
+        COALESCE(hist.history_user_rows, 0) DESC,
+        GREATEST(
+            COALESCE(hist.last_history_at, TO_TIMESTAMP(0)),
+            COALESCE(cm.last_metric_at, TO_TIMESTAMP(0)),
+            COALESCE(c.joined_at, TO_TIMESTAMP(0))
+        ) DESC,
+        c.joined_at DESC
+    """
+
+    rows = await pool.fetch(query)
+    return [dict(r) for r in rows]
+
+
 async def get_stats() -> dict:
     """
     Return aggregate statistics for the superadmin /sa_stats command.
@@ -157,6 +257,10 @@ async def get_stats() -> dict:
                  THEN 0
                  ELSE pg_total_relation_size(to_regclass('public.bot_metrics'))
             END AS bot_metrics_bytes,
+              CASE WHEN to_regclass('public.chat_metrics') IS NULL
+                  THEN 0
+                  ELSE pg_total_relation_size(to_regclass('public.chat_metrics'))
+              END AS chat_metrics_bytes,
             CASE WHEN to_regclass('public.untouchable_users') IS NULL
                  THEN 0
                  ELSE pg_total_relation_size(to_regclass('public.untouchable_users'))
@@ -168,5 +272,6 @@ async def get_stats() -> dict:
     totals["user_summaries_bytes"] = int(sizes["user_summaries_bytes"] or 0)
     totals["chats_bytes"] = int(sizes["chats_bytes"] or 0)
     totals["bot_metrics_bytes"] = int(sizes["bot_metrics_bytes"] or 0)
+    totals["chat_metrics_bytes"] = int(sizes["chat_metrics_bytes"] or 0)
     totals["untouchable_users_bytes"] = int(sizes["untouchable_users_bytes"] or 0)
     return totals

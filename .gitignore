@@ -22,9 +22,18 @@ pip-wheel-metadata/
 
 # Virtual environments
 .venv/
+.venv*/
 venv/
 env/
 ENV/
+
+# Temporary local files
+*.tmp
+*.temp
+tmp/
+temp/
+.tmp/
+.tmp_pkg/
 
 # Testing
 .pytest_cache/
@@ -65,3 +74,8 @@ dmypy.json
 
 # ruff / black
 .ruff_cache/
+
+# Local agent workspace artifacts
+rules
+docs/
+plan/

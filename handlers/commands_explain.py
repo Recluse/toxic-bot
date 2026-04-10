@@ -91,6 +91,7 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     is_pm       = chat.type == ChatType.PRIVATE
 
     await metrics_db.increment("explain_requests")
+    await metrics_db.increment_chat_metric(chat.id, "explain_commands")
 
     if not is_pm:
         explain_cd_min = int(settings.get("explain_cooldown_min", 10))
@@ -166,6 +167,9 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     detection = detect_prompt_injection(content_text)
     if detection.blocked:
+        await metrics_db.increment_chat_metric(chat.id, "prompt_injection_blocked")
+        await metrics_db.increment_chat_metric(chat.id, "prompt_injection_visible")
+
         target_user_id, target_username, target_is_channel_sender = resolve_message_actor(
             target,
             target.from_user,
@@ -243,6 +247,7 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         target_user_id,
         explain_target_type,
     )
+    await metrics_db.increment_chat_metric(chat.id, "explain_llm_requests")
 
     try:
         reply = await get_reply(
@@ -269,6 +274,7 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         reply,
         target.message_id,
     )
+    await metrics_db.increment_chat_metric(chat.id, "explain_replies_sent")
 
     # Clean up command messages in group chats.
     if chat.type != ChatType.PRIVATE:

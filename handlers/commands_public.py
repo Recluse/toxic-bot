@@ -17,6 +17,7 @@ from ai.vision import get_image_base64
 
 import db.chat_settings as settings_db
 import db.history as history_db
+import db.metrics as metrics_db
 import db.untouchables as untouchables_db
 from ai.responder import get_reply
 from i18n import get_text
@@ -182,8 +183,13 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     target = message.reply_to_message
     text   = (target.text or target.caption or "").strip()
 
+    await metrics_db.increment_chat_metric(chat_id, "toxic_commands")
+
     detection = detect_prompt_injection(text)
     if detection.blocked:
+        await metrics_db.increment_chat_metric(chat_id, "prompt_injection_blocked")
+        await metrics_db.increment_chat_metric(chat_id, "prompt_injection_visible")
+
         target_user_id, target_username, target_is_channel_sender = resolve_message_actor(
             target,
             target.from_user,
@@ -307,6 +313,7 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         target_user_id,
         target.message_id,
     )
+    await metrics_db.increment_chat_metric(chat_id, "toxic_llm_requests")
 
     try:
         reply = await get_reply(
@@ -331,6 +338,7 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             chat_id=chat_id,
         ),
     )
+    await metrics_db.increment_chat_metric(chat_id, "toxic_replies_sent")
 
 
 async def cmd_dont_touch_me(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

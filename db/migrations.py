@@ -180,6 +180,31 @@ _MIGRATIONS = [
       value       BIGINT NOT NULL DEFAULT 0
     )
     """,
+    # 008 — per-chat counters for richer superadmin dashboards
+    """
+    CREATE TABLE IF NOT EXISTS chat_metrics (
+      chat_id     BIGINT NOT NULL,
+      metric_key  TEXT   NOT NULL,
+      value       BIGINT NOT NULL DEFAULT 0,
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (chat_id, metric_key)
+    )
+    """,
+    """
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+          SELECT 1
+            FROM pg_class
+           WHERE relkind = 'i'
+             AND relname = 'chat_metrics_updated_at_idx'
+      ) THEN
+          CREATE INDEX chat_metrics_updated_at_idx
+            ON chat_metrics (updated_at DESC);
+      END IF;
+    END
+    $$;
+    """,
 ]
 
 

@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 import re
 from typing import Any
+import unicodedata
 
 from config import config
 
@@ -32,6 +33,8 @@ _ADMIN_TAG_RE = re.compile(r"<\s*(?:/|\\)?\s*admin\b[^>]*>", re.IGNORECASE)
 _ADMIN_TAG_ESCAPED_RE = re.compile(r"&lt;\s*(?:/|\\)?\s*admin\b.*?&gt;", re.IGNORECASE)
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 _BASE64_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{24,}={0,2}(?![A-Za-z0-9+/=])")
+_EMOJI_VARIATION_SELECTORS = {"\ufe0e", "\ufe0f"}
+_EMOJI_JOINER = "\u200d"
 _CONTEXT_HINT_RE = re.compile(
     r"ignore\s+previous\s+instructions|system\s+prompt|developer\s+mode|dan\b|"
     r"reveal\s+instructions|repeat\s+everything\s+above|jailbreak",
@@ -104,6 +107,63 @@ def _is_url_false_positive(text: str, result: Any) -> bool:
     return _BASE64_TOKEN_RE.search(text_without_urls) is None
 
 
+def _is_emoji_cluster_char(char: str) -> bool:
+    codepoint = ord(char)
+    category = unicodedata.category(char)
+    return (
+        category == "So"
+        or char in _EMOJI_VARIATION_SELECTORS
+        or 0x1F1E6 <= codepoint <= 0x1F1FF
+        or 0x1F3FB <= codepoint <= 0x1F3FF
+    )
+
+
+def _find_neighboring_base_char(text: str, start_index: int, step: int) -> str | None:
+    index = start_index + step
+    while 0 <= index < len(text):
+        char = text[index]
+        if char in _EMOJI_VARIATION_SELECTORS:
+            index += step
+            continue
+        return char
+    return None
+
+
+def _is_benign_unicode_false_positive(text: str, result: Any) -> bool:
+    """Allow normal emoji ZWJ sequences when the scanner only reports unicode smuggling."""
+    matches = _result_matches(result)
+    if not matches:
+        return False
+
+    match_names = {m.get("name") for m in matches if m.get("name")}
+    if match_names != {"unicode_smuggling"}:
+        return False
+
+    if _EMOJI_JOINER not in text:
+        return False
+
+    has_emoji_symbol = any(_is_emoji_cluster_char(char) for char in text)
+    if not has_emoji_symbol:
+        return False
+
+    for char in text:
+        if unicodedata.category(char) == "Cf" and char != _EMOJI_JOINER:
+            return False
+
+    for index, char in enumerate(text):
+        if char != _EMOJI_JOINER:
+            continue
+
+        prev_char = _find_neighboring_base_char(text, index, -1)
+        next_char = _find_neighboring_base_char(text, index, 1)
+        if prev_char is None or next_char is None:
+            return False
+        if not _is_emoji_cluster_char(prev_char) or not _is_emoji_cluster_char(next_char):
+            return False
+
+    return True
+
+
 def _format_result_reason(result: Any) -> str:
     matches = _result_matches(result)
     pretty_matches = "; ".join(
@@ -157,6 +217,13 @@ def detect_prompt_injection(
         )
         return InjectionDetectionResult(blocked=False)
 
+    if _is_benign_unicode_false_positive(text, result):
+        logging.getLogger(__name__).debug(
+            "Suppressed ai-injection-guard emoji unicode false positive: %s",
+            _format_result_reason(result),
+        )
+        return InjectionDetectionResult(blocked=False)
+
     if result.is_safe:
         if strict_context and _context_scanner is not None:
             try:
@@ -169,6 +236,13 @@ def detect_prompt_injection(
                 if _is_url_false_positive(text, context_result):
                     logging.getLogger(__name__).debug(
                         "Suppressed context ai-injection-guard URL false positive: %s",
+                        _format_result_reason(context_result),
+                    )
+                    return InjectionDetectionResult(blocked=False)
+
+                if _is_benign_unicode_false_positive(text, context_result):
+                    logging.getLogger(__name__).debug(
+                        "Suppressed context ai-injection-guard emoji unicode false positive: %s",
                         _format_result_reason(context_result),
                     )
                     return InjectionDetectionResult(blocked=False)

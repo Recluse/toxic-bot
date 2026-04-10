@@ -42,6 +42,7 @@ precision — powered by Groq LLM via a Cloudflare AI Gateway.
 - Context sanitization before LLM call: history and reply-chain entries are filtered for injection and dropped if unsafe
 - Tag guard also covers admin-tag variants (`<admin>`, `</admin>`, `<\admin>`) including regex/escaped forms
 - Ordinary `https://...` links no longer trigger false-positive `ai-injection-guard` blocks when they are just links
+- Normal emoji ZWJ sequences such as `🤷‍♂️` no longer trigger false-positive `unicode_smuggling` blocks
 - Dedicated injection event log: `logs/prompt_injection_events.log` with full chat/user/message payload
 - Superadmin PM alerts on every injection trigger with source and detailed reason
 - Injection-like random group messages are silently dropped; explicit reactions remain in PM, commands, and direct replies to the bot
@@ -197,7 +198,8 @@ No manual SQL required. Tables created:
 | `user_profiles` / `user_summaries` | Per-user psychological/behavioral summaries |
 | `untouchable_users` | Per-chat ignore list                                |
 | `global_untouchables` | Global opt-out list across all chats             |
-| `bot_metrics`    | Persistent counters for superadmin stats               |
+| `bot_metrics`    | Persistent global counters for superadmin stats        |
+| `chat_metrics`   | Per-chat activity counters for superadmin dashboards   |
 
 Chats are auto-registered on the first incoming message.
 
@@ -286,12 +288,12 @@ Superadmins (`SUPERADMIN_IDS` in `.env`). Commands work **only in private chat**
 
 | Command          | Description                                      |
 |------------------|--------------------------------------------------|
-| `/sa_chats`      | List all active chats with IDs and join dates    |
-| `/sa_stats`      | Runtime, chat/user totals, processed content, DB sizes |
+| `/sa_chats`      | Group active spaces by groups/PMs/channels with per-chat activity, history, settings, and injection counters |
+| `/sa_stats`      | Grouped dashboard: runtime, scope split, traffic, top spaces, DB sizes |
 | `/sa_broadcast`  | Send message to all active groups (conversation) |
 | `/cancel`        | Abort in-progress broadcast                      |
 
-`/sa_chats` enriches entries with live Telegram lookup by `chat_id` (name/title and `@username`) and falls back to DB data.
+`/sa_chats` enriches entries with live Telegram lookup by `chat_id` (name/title and `@username`) and falls back to DB data. It also shows tracked incoming messages, replies, history rows, distinct users, injection counters, and current chat settings for each space.
 
 ### Automatic PM notifications
 

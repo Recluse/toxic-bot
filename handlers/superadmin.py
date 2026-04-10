@@ -22,7 +22,7 @@ from telegram.ext import (
 )
 
 from config import config
-from db.chats import list_chats, get_stats
+from db.chats import get_stats, list_chats, list_chats_with_stats
 from db.metrics import get_all as get_all_metrics
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,13 @@ _CHAT_TYPE_LABEL = {
     "supergroup": "supergroup",
     "channel":    "channel",
     "private":    "private",
+}
+
+_SCOPE_TITLES = {
+    "group_space": "Groups & Supergroups",
+    "private": "Private Dialogs",
+    "channel": "Channels",
+    "other": "Other",
 }
 
 _PROCESS_STARTED_AT = datetime.now()
@@ -92,6 +99,89 @@ def _fmt_uptime(started_at: datetime) -> str:
     return " ".join(parts)
 
 
+def _fmt_datetime(value: datetime | None) -> str:
+    if value is None:
+        return "-"
+    return value.strftime("%Y-%m-%d %H:%M")
+
+
+def _chat_scope(chat_type: str | None) -> str:
+    if chat_type == "private":
+        return "private"
+    if chat_type in {"group", "supergroup"}:
+        return "group_space"
+    if chat_type == "channel":
+        return "channel"
+    return "other"
+
+
+def _chat_reply_total(chat: dict) -> int:
+    return (
+        int(chat.get("chat_replies_sent", 0))
+        + int(chat.get("explain_replies_sent", 0))
+        + int(chat.get("toxic_replies_sent", 0))
+    )
+
+
+def _chat_llm_total(chat: dict) -> int:
+    return (
+        int(chat.get("chat_llm_requests", 0))
+        + int(chat.get("explain_llm_requests", 0))
+        + int(chat.get("toxic_llm_requests", 0))
+    )
+
+
+def _chat_sort_key(chat: dict) -> tuple:
+    last_activity = chat.get("last_activity_at") or chat.get("joined_at")
+    return (
+        int(chat.get("processed_total", 0)),
+        int(chat.get("history_user_rows", 0)),
+        _chat_reply_total(chat),
+        last_activity.timestamp() if last_activity else 0.0,
+    )
+
+
+def _aggregate_chat_rows(rows: list[dict]) -> dict[str, int]:
+    return {
+        "processed_total": sum(int(r.get("processed_total", 0)) for r in rows),
+        "processed_text": sum(int(r.get("processed_text", 0)) for r in rows),
+        "processed_voice": sum(int(r.get("processed_voice", 0)) for r in rows),
+        "processed_image": sum(int(r.get("processed_image", 0)) for r in rows),
+        "history_rows": sum(int(r.get("history_rows", 0)) for r in rows),
+        "history_user_rows": sum(int(r.get("history_user_rows", 0)) for r in rows),
+        "history_assistant_rows": sum(int(r.get("history_assistant_rows", 0)) for r in rows),
+        "distinct_users": sum(int(r.get("distinct_users", 0)) for r in rows),
+        "chat_llm_requests": sum(int(r.get("chat_llm_requests", 0)) for r in rows),
+        "chat_replies_sent": sum(int(r.get("chat_replies_sent", 0)) for r in rows),
+        "explain_commands": sum(int(r.get("explain_commands", 0)) for r in rows),
+        "explain_llm_requests": sum(int(r.get("explain_llm_requests", 0)) for r in rows),
+        "explain_replies_sent": sum(int(r.get("explain_replies_sent", 0)) for r in rows),
+        "toxic_commands": sum(int(r.get("toxic_commands", 0)) for r in rows),
+        "toxic_llm_requests": sum(int(r.get("toxic_llm_requests", 0)) for r in rows),
+        "toxic_replies_sent": sum(int(r.get("toxic_replies_sent", 0)) for r in rows),
+        "prompt_injection_blocked": sum(int(r.get("prompt_injection_blocked", 0)) for r in rows),
+        "prompt_injection_visible": sum(int(r.get("prompt_injection_visible", 0)) for r in rows),
+        "prompt_injection_silent": sum(int(r.get("prompt_injection_silent", 0)) for r in rows),
+    }
+
+
+def _append_top_spaces(lines: list[str], title: str, rows: list[dict], limit: int = 3) -> None:
+    if not rows:
+        return
+
+    lines.append(f"<b>{html.escape(title)}</b>")
+    for idx, row in enumerate(sorted(rows, key=_chat_sort_key, reverse=True)[:limit], start=1):
+        title_raw = row.get("title") or row.get("username") or "(untitled)"
+        lines.append(
+            f"{idx}. <b>{html.escape(str(title_raw))}</b> — "
+            f"incoming {_fmt_int(int(row.get('processed_total', 0)))} | "
+            f"replies {_fmt_int(_chat_reply_total(row))} | "
+            f"history {_fmt_int(int(row.get('history_rows', 0)))} | "
+            f"last {_fmt_datetime(row.get('last_activity_at'))}"
+        )
+    lines.append("")
+
+
 async def _resolve_chat_identity(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> dict[str, str]:
     """Best-effort fetch of fresh chat identity from Telegram by chat_id."""
     try:
@@ -126,41 +216,75 @@ def _is_superadmin(user_id: int) -> bool:
 # --- /sa_chats ---
 
 async def cmd_sa_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List all active chats with ID, @username, and join date."""
+    """List active chats grouped by scope with per-chat activity summary."""
     if not _is_superadmin(update.effective_user.id):
         return
 
-    chats = await list_chats(active_only=True)
+    chats = await list_chats_with_stats(active_only=True)
     if not chats:
         await update.message.reply_text("No active chats recorded.")
         return
 
-    by_type: dict[str, int] = {}
-    for c in chats:
-        ctype = c.get("chat_type") or "unknown"
-        by_type[ctype] = by_type.get(ctype, 0) + 1
+    grouped: dict[str, list[dict]] = {scope: [] for scope in _SCOPE_TITLES}
+    for chat_row in chats:
+        grouped[_chat_scope(chat_row.get("chat_type"))].append(chat_row)
 
-    lines = ["<b>Active Chats</b>", f"Total: <b>{_fmt_int(len(chats))}</b>"]
-    summary_parts = []
-    for chat_type in ["private", "group", "supergroup", "channel"]:
-        summary_parts.append(f"{chat_type}: {_fmt_int(by_type.get(chat_type, 0))}")
-    lines.append(" | ".join(summary_parts))
-    lines.append("")
+    lines = [
+        "<b>Active Chats</b>",
+        f"Total: <b>{_fmt_int(len(chats))}</b>",
+        (
+            f"Groups & supergroups: {_fmt_int(len(grouped['group_space']))} | "
+            f"Private dialogs: {_fmt_int(len(grouped['private']))} | "
+            f"Channels: {_fmt_int(len(grouped['channel']))}"
+        ),
+        "",
+    ]
 
-    for idx, c in enumerate(chats, start=1):
-        label = _CHAT_TYPE_LABEL.get(c["chat_type"], "?")
-        resolved = await _resolve_chat_identity(context, c["chat_id"])
-        title_raw = resolved["title"] or c["title"] or "(no title)"
-        username_raw = resolved["username"] or c.get("username") or ""
-        handle = f"@{username_raw}" if username_raw else "(no username)"
-        joined = c["joined_at"].strftime("%Y-%m-%d") if c.get("joined_at") else "?"
-        title = html.escape(title_raw)
-        status = "live" if resolved["source"] == "live" else "db"
+    for scope in ("group_space", "private", "channel", "other"):
+        rows = grouped.get(scope) or []
+        if not rows:
+            continue
+
+        rows = sorted(rows, key=_chat_sort_key, reverse=True)
+        summary = _aggregate_chat_rows(rows)
+        lines.append(f"<b>{_SCOPE_TITLES[scope]} — {_fmt_int(len(rows))}</b>")
         lines.append(
-            f"{idx}. <b>[{html.escape(label)}]</b> {title}\n"
-            f"   id: <code>{c['chat_id']}</code> | user: {html.escape(handle)} | joined: {joined} | src: {status}"
+            " | ".join([
+                f"incoming {_fmt_int(summary['processed_total'])}",
+                f"replies {_fmt_int(summary['chat_replies_sent'] + summary['explain_replies_sent'] + summary['toxic_replies_sent'])}",
+                f"history {_fmt_int(summary['history_rows'])}",
+                f"injections {_fmt_int(summary['prompt_injection_blocked'])}",
+            ])
         )
         lines.append("")
+
+        for idx, c in enumerate(rows, start=1):
+            label = _CHAT_TYPE_LABEL.get(c.get("chat_type"), "?")
+            resolved = await _resolve_chat_identity(context, c["chat_id"])
+            title_raw = resolved["title"] or c.get("title") or "(no title)"
+            username_raw = resolved["username"] or c.get("username") or ""
+            handle = f"@{username_raw}" if username_raw else "(no username)"
+            joined = _fmt_datetime(c.get("joined_at"))
+            last_activity = _fmt_datetime(c.get("last_activity_at"))
+            title = html.escape(title_raw)
+            status = "live" if resolved["source"] == "live" else "db"
+            lines.append(
+                f"{idx}. <b>{title}</b> <code>[{html.escape(label)}]</code>\n"
+                f"   id=<code>{c['chat_id']}</code> | user={html.escape(handle)} | joined={joined} | last={last_activity} | src={status}\n"
+                f"   incoming={_fmt_int(int(c.get('processed_total', 0)))} "
+                f"(txt {_fmt_int(int(c.get('processed_text', 0)))} / voice {_fmt_int(int(c.get('processed_voice', 0)))} / img {_fmt_int(int(c.get('processed_image', 0)))}) | "
+                f"replies={_fmt_int(_chat_reply_total(c))} | llm={_fmt_int(_chat_llm_total(c))}\n"
+                f"   history={_fmt_int(int(c.get('history_rows', 0)))} rows "
+                f"(user {_fmt_int(int(c.get('history_user_rows', 0)))} / bot {_fmt_int(int(c.get('history_assistant_rows', 0)))}) | "
+                f"users={_fmt_int(int(c.get('distinct_users', 0)))} | "
+                f"inj={_fmt_int(int(c.get('prompt_injection_blocked', 0)))} "
+                f"(visible {_fmt_int(int(c.get('prompt_injection_visible', 0)))} / silent {_fmt_int(int(c.get('prompt_injection_silent', 0)))})\n"
+                f"   settings: lang={html.escape(str((c.get('lang') or '-')).upper())} | tox={_fmt_int(int(c.get('toxicity_level', 0) or 0))} | "
+                f"freq={_fmt_int(int(c.get('freq_min', 0) or 0))}-{_fmt_int(int(c.get('freq_max', 0) or 0))} | "
+                f"cd={_fmt_int(int(c.get('reply_cooldown_sec', 0) or 0))}s | explain={_fmt_int(int(c.get('explain_cooldown_min', 0) or 0))}m | "
+                f"min_words={_fmt_int(int(c.get('min_words', 0) or 0))}"
+            )
+            lines.append("")
 
     for part in _chunk_lines(lines):
         await update.message.reply_text(part, parse_mode="HTML")
@@ -176,7 +300,19 @@ async def cmd_sa_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     stats = await get_stats()
     metrics = await get_all_metrics()
+    chat_rows = await list_chats_with_stats(active_only=True)
     by_type = stats.get("by_type", {})
+
+    grouped = {
+        "group_space": [row for row in chat_rows if _chat_scope(row.get("chat_type")) == "group_space"],
+        "private": [row for row in chat_rows if _chat_scope(row.get("chat_type")) == "private"],
+        "channel": [row for row in chat_rows if _chat_scope(row.get("chat_type")) == "channel"],
+        "other": [row for row in chat_rows if _chat_scope(row.get("chat_type")) == "other"],
+    }
+    totals = _aggregate_chat_rows(chat_rows)
+    private_totals = _aggregate_chat_rows(grouped["private"])
+    group_totals = _aggregate_chat_rows(grouped["group_space"])
+    channel_totals = _aggregate_chat_rows(grouped["channel"])
 
     processed_text = int(metrics.get("processed_text", 0))
     processed_image = int(metrics.get("processed_image", 0))
@@ -190,25 +326,29 @@ async def cmd_sa_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"- Uptime: <b>{_fmt_uptime(_PROCESS_STARTED_AT)}</b>",
         f"- Started at: {_PROCESS_STARTED_AT.strftime('%Y-%m-%d %H:%M:%S')}",
         "",
-        "<b>Chats</b>",
-        f"- Total ever: <b>{_fmt_int(stats.get('total', 0))}</b>",
-        f"- Active now: <b>{_fmt_int(stats.get('active', 0))}</b>",
-        f"- Inactive: {_fmt_int(stats.get('inactive', 0))}",
-        f"- Private: {_fmt_int(by_type.get('private', 0))}",
-        f"- Group: {_fmt_int(by_type.get('group', 0))}",
-        f"- Supergroup: {_fmt_int(by_type.get('supergroup', 0))}",
-        f"- Channel: {_fmt_int(by_type.get('channel', 0))}",
+        "<b>Chat Footprint</b>",
+        f"- Seen ever: <b>{_fmt_int(stats.get('total', 0))}</b>",
+        f"- Active now: <b>{_fmt_int(stats.get('active', 0))}</b> | inactive {_fmt_int(stats.get('inactive', 0))}",
+        f"- Active grouped: group spaces {_fmt_int(len(grouped['group_space']))} | private dialogs {_fmt_int(len(grouped['private']))} | channels {_fmt_int(len(grouped['channel']))}",
+        f"- Active raw types: private {_fmt_int(by_type.get('private', 0))} | group {_fmt_int(by_type.get('group', 0))} | supergroup {_fmt_int(by_type.get('supergroup', 0))} | channel {_fmt_int(by_type.get('channel', 0))}",
         "",
-        "<b>Users</b>",
+        "<b>Traffic</b>",
+        f"- Global processed content: <b>{_fmt_int(processed_text + processed_voice + processed_image)}</b> | text {_fmt_int(processed_text)} | voice {_fmt_int(processed_voice)} | image {_fmt_int(processed_image)}",
+        f"- Per-chat tracked incoming: <b>{_fmt_int(totals['processed_total'])}</b> | groups {_fmt_int(group_totals['processed_total'])} | private {_fmt_int(private_totals['processed_total'])} | channels {_fmt_int(channel_totals['processed_total'])}",
+        f"- Bot replies sent: chat {_fmt_int(totals['chat_replies_sent'])} | explain {_fmt_int(totals['explain_replies_sent'])} | toxic {_fmt_int(totals['toxic_replies_sent'])}",
+        f"- LLM jobs: chat {_fmt_int(totals['chat_llm_requests'])} | explain {_fmt_int(totals['explain_llm_requests'])} | toxic {_fmt_int(totals['toxic_llm_requests'])}",
+        f"- Commands: /explain {_fmt_int(totals['explain_commands'])} | /toxic {_fmt_int(totals['toxic_commands'])} | global /explain counter {_fmt_int(explain_requests)}",
+        f"- Injection blocks: <b>{_fmt_int(totals['prompt_injection_blocked'])}</b> | visible {_fmt_int(totals['prompt_injection_visible'])} | silent {_fmt_int(totals['prompt_injection_silent'])}",
+        "",
+        "<b>Users & History</b>",
         f"- Users with history: <b>{_fmt_int(stats.get('users_in_history', 0))}</b>",
         f"- Users in summaries: {_fmt_int(stats.get('users_in_profiles', 0))}",
+        f"- Stored history rows: {_fmt_int(stats.get('history_rows', 0))}",
+        f"- Active chats with tracked incoming: {_fmt_int(sum(1 for row in chat_rows if int(row.get('processed_total', 0)) > 0))}",
+        f"- Active chats with any history: {_fmt_int(sum(1 for row in chat_rows if int(row.get('history_rows', 0)) > 0))}",
         "",
-        "<b>Processed Content</b>",
-        f"- Text messages: <b>{_fmt_int(processed_text)}</b>",
-        f"- Images: {_fmt_int(processed_image)}",
-        f"- Voice: {_fmt_int(processed_voice)}",
-        f"- /explain calls: <b>{_fmt_int(explain_requests)}</b>",
-        f"- History rows total: {_fmt_int(stats.get('history_rows', 0))}",
+        "<b>Top Spaces</b>",
+        "",
         "",
         "<b>Database</b>",
         f"- Total DB size: <b>{_fmt_bytes(stats.get('db_total_bytes', 0))}</b>",
@@ -216,12 +356,21 @@ async def cmd_sa_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"- user_summaries: {_fmt_bytes(stats.get('user_summaries_bytes', 0))}",
         f"- chats: {_fmt_bytes(stats.get('chats_bytes', 0))}",
         f"- bot_metrics: {_fmt_bytes(stats.get('bot_metrics_bytes', 0))}",
+        f"- chat_metrics: {_fmt_bytes(stats.get('chat_metrics_bytes', 0))}",
         f"- untouchable_users: {_fmt_bytes(stats.get('untouchable_users_bytes', 0))}",
         "",
         f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
     ]
 
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    top_insert_at = lines.index("<b>Database</b>")
+    top_lines: list[str] = []
+    _append_top_spaces(top_lines, "Top Groups & Supergroups", grouped["group_space"], limit=3)
+    _append_top_spaces(top_lines, "Top Private Dialogs", grouped["private"], limit=3)
+    _append_top_spaces(top_lines, "Top Channels", grouped["channel"], limit=2)
+    lines[top_insert_at:top_insert_at] = top_lines
+
+    for part in _chunk_lines(lines):
+        await update.message.reply_text(part, parse_mode="HTML")
     logger.info("Superadmin %s requested stats", update.effective_user.id)
 
 

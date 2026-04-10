@@ -142,6 +142,7 @@ async def handle_message(
 
     if message.text:
         await metrics_db.increment("processed_text")
+        await metrics_db.increment_chat_metric(chat_id, "processed_text")
         if is_pm and not check_pm_text_quota(chat_id, user_id):
             await message.reply_text(get_text("pm_text_hour_limit", lang))
             return
@@ -149,6 +150,7 @@ async def handle_message(
 
     elif message.voice or message.audio:
         await metrics_db.increment("processed_voice")
+        await metrics_db.increment_chat_metric(chat_id, "processed_voice")
         if is_pm and not check_pm_media_quota(chat_id, user_id):
             await message.reply_text(get_text("pm_media_hour_limit", lang))
             return
@@ -166,6 +168,7 @@ async def handle_message(
 
     elif message.photo:
         await metrics_db.increment("processed_image")
+        await metrics_db.increment_chat_metric(chat_id, "processed_image")
         if is_pm and not check_pm_media_quota(chat_id, user_id):
             await message.reply_text(get_text("pm_media_hour_limit", lang))
             return
@@ -187,6 +190,13 @@ async def handle_message(
 
     detection = detect_prompt_injection(text)
     if detection.blocked:
+        is_visible_block = is_pm or is_reply_to_bot
+        await metrics_db.increment_chat_metric(chat_id, "prompt_injection_blocked")
+        await metrics_db.increment_chat_metric(
+            chat_id,
+            "prompt_injection_visible" if is_visible_block else "prompt_injection_silent",
+        )
+
         payload = build_injection_payload(
             chat=chat,
             actor_id=user_id,
@@ -212,7 +222,7 @@ async def handle_message(
 
         # In groups, only react when user directly replies to the bot.
         # For random chat messages, silently drop here.
-        if is_pm or is_reply_to_bot:
+        if is_visible_block:
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=get_text("prompt_injection_blocked", lang),
@@ -341,6 +351,7 @@ async def handle_message(
         is_channel_sender,
         is_forward_like,
     )
+    await metrics_db.increment_chat_metric(chat_id, "chat_llm_requests")
 
     # If the selected message is a photo, describe it now (post-frequency gating).
     if photo_file_id:
@@ -382,3 +393,4 @@ async def handle_message(
         text=reply,
         reply_to_message_id=message.message_id,
     )
+    await metrics_db.increment_chat_metric(chat_id, "chat_replies_sent")
