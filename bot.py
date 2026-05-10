@@ -11,6 +11,7 @@ Responsibilities:
 """
 
 import logging
+from datetime import datetime
 
 from telegram import Update
 from telegram.ext import (
@@ -70,6 +71,37 @@ async def _on_startup(application: Application) -> None:
         config.groq.base_url,
         list(config.superadmin_ids),
     )
+    await _notify_superadmins_startup(application)
+
+
+async def _notify_superadmins_startup(application: Application) -> None:
+    """
+    Send a one-shot "bot is up" PM to every SUPERADMIN_ID.
+    Failures (blocked bot, never-PMd-bot, etc.) are logged but do not
+    interrupt startup — the bot must keep coming up regardless.
+    """
+    if not config.superadmin_ids:
+        return
+
+    text = (
+        "🟢 <b>TOXIC bot started</b>\n"
+        f"Model: <code>{config.groq.model}</code>\n"
+        f"Time:  <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"
+    )
+
+    for sa_id in config.superadmin_ids:
+        try:
+            await application.bot.send_message(
+                chat_id=sa_id,
+                text=text,
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            # Most common: superadmin has never PMd the bot, or blocked it.
+            logger.warning(
+                "Startup notification to superadmin %d failed: %s",
+                sa_id, exc,
+            )
 
 
 async def _on_shutdown(application: Application) -> None:
