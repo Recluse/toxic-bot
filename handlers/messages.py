@@ -108,6 +108,11 @@ async def handle_message(
     # for messages from OWNER_USER_ID or sent on behalf of OWNER_CHANNEL_ID.
     sender_chat_id = message.sender_chat.id if message.sender_chat else None
     from_owner = is_owner(user.id if user else None, sender_chat_id)
+    if from_owner:
+        logger.info(
+            "Owner detected chat_id=%d user_id=%s sender_chat_id=%s",
+            chat_id, user.id if user else None, sender_chat_id,
+        )
 
     # --- Load settings and auto-register chat ---
     settings = await settings_db.get_or_create(chat_id)
