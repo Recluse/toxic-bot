@@ -8,12 +8,20 @@ In private chats it always returns True (the user is the only participant).
 SUPERADMIN_IDS — personal numeric user IDs (bypass all checks).
 SUPERADMIN_CHANNELS — channel IDs (e.g. -1001067810422) or usernames
     (e.g. popyachsa) whose posts are treated as superadmin actions.
+
+is_owner() identifies the bot's creator/operator. The owner can author
+either as a regular user (OWNER_USER_ID) or as their channel
+(OWNER_CHANNEL_ID — sender_chat in a group). Owner mode disables the
+toxic persona — see ai/responder.py.
 """
 
-import os
 import logging
+import os
+
 from telegram import Update
 from telegram.constants import ChatMemberStatus
+
+from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +54,29 @@ if _SUPERADMIN_IDS or _SUPERADMIN_CHANNEL_IDS or _SUPERADMIN_CHANNEL_USERNAMES:
         "Superadmins loaded — user_ids=%s channel_ids=%s channel_usernames=%s",
         _SUPERADMIN_IDS, _SUPERADMIN_CHANNEL_IDS, _SUPERADMIN_CHANNEL_USERNAMES,
     )
+
+
+def is_owner(user_id: int | None, sender_chat_id: int | None = None) -> bool:
+    """
+    True if the message author is the bot owner.
+
+    Matches when either:
+      - user_id equals OWNER_USER_ID, or
+      - sender_chat_id equals OWNER_CHANNEL_ID (admin posting as channel)
+
+    Both env vars default to 0 (disabled) so an unconfigured deployment
+    never accidentally treats user 0 / chat 0 as owner.
+    """
+    owner_user_id = config.owner.user_id
+    owner_channel_id = config.owner.channel_id
+
+    if owner_user_id and user_id is not None and user_id == owner_user_id:
+        return True
+
+    if owner_channel_id and sender_chat_id is not None and sender_chat_id == owner_channel_id:
+        return True
+
+    return False
 
 
 def _is_superadmin_channel(update: Update) -> bool:

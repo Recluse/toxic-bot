@@ -9,7 +9,7 @@ import logging
 
 from ai.client import chat_completion, vision_completion
 from ai.modes import BotMode
-from ai.prompts import get_system_prompt, get_explain_prompt
+from ai.prompts import get_system_prompt, get_explain_prompt, get_owner_prompt
 from ai.vision import build_vision_message
 import db.history as history_db
 from utils.prompt_injection_guard import detect_prompt_injection
@@ -61,17 +61,22 @@ async def get_reply(
     extra_context:  list[dict] | None = None,
     mode:           BotMode           = BotMode.CHAT,
     image_base64:   str | None        = None,
+    is_owner:       bool              = False,
 ) -> str:
     """
     Build the full message list and call the appropriate Groq endpoint.
 
     In CHAT mode:    toxic persona, uses history, saves reply to history.
+                     If is_owner=True, the toxic persona is replaced with
+                     the loyal-assistant prompt — owners are never roasted.
     In EXPLAIN mode: scientific pedant, no history read/write,
                      vision model used when image_base64 is provided.
 
     Args:
         image_base64: Base64-encoded image string from ai.vision.
                       When provided in EXPLAIN mode the vision model is used.
+        is_owner:     Caller verified the message comes from the bot owner
+                      (see utils.admin_check.is_owner). Forces non-toxic mode.
     """
     if mode == BotMode.EXPLAIN:
         return await _explain_reply(
@@ -91,6 +96,7 @@ async def get_reply(
         toxicity_level=toxicity_level,
         lang=lang,
         extra_context=extra_context or [],
+        is_owner=is_owner,
     )
 
 
@@ -102,12 +108,19 @@ async def _chat_reply(
     toxicity_level: int,
     lang:           str,
     extra_context:  list[dict],
+    is_owner:       bool = False,
 ) -> str:
     # Load recent history (prefer per-user when available, else fall back
     # to chat-scoped history for legacy data) and optional profile summary.
     history       = await history_db.get_recent_for_user(user_id, chat_id)
     user_summary  = await history_db.get_user_summary(user_id)
-    system_prompt = get_system_prompt(toxicity_level, lang, user_summary)
+
+    # Owner messages bypass the toxic persona entirely. The user summary is
+    # also dropped — psychological profiling the owner is the wrong move.
+    if is_owner:
+        system_prompt = get_owner_prompt(lang)
+    else:
+        system_prompt = get_system_prompt(toxicity_level, lang, user_summary)
 
     history = _filter_context_messages(
         history,

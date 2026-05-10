@@ -50,6 +50,7 @@ from utils.prompt_injection_guard import (
     log_injection_event,
     notify_superadmins_injection_event,
 )
+from utils.admin_check import is_owner
 from utils.reply_chain import collect_chain
 from utils.tg_sender import resolve_message_actor
 
@@ -102,6 +103,11 @@ async def handle_message(
     if (not is_channel_sender) and user and (user_id == 777000 or user.is_bot):
         logger.debug("Ignored service/bot sender chat_id=%d user_id=%d", chat_id, user_id)
         return
+
+    # Owner check — toxic persona is replaced with a loyal-assistant prompt
+    # for messages from OWNER_USER_ID or sent on behalf of OWNER_CHANNEL_ID.
+    sender_chat_id = message.sender_chat.id if message.sender_chat else None
+    from_owner = is_owner(user.id if user else None, sender_chat_id)
 
     # --- Load settings and auto-register chat ---
     settings = await settings_db.get_or_create(chat_id)
@@ -379,6 +385,7 @@ async def handle_message(
             extra_context=extra_context,
             mode=BotMode.CHAT,
             image_base64=image_base64,
+            is_owner=from_owner,
         )
     except Exception as exc:
         logger.error("get_reply failed chat_id=%d: %s", chat_id, exc)

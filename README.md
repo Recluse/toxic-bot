@@ -169,7 +169,7 @@ reply_chain_depth = 5
 min_words = 5
 
 [groq]
-model = moonshotai/kimi-k2-instruct-0905  # or llama3-groq-70b-8192-tool-use-preview
+model = openai/gpt-oss-120b  # current Groq production text model
 fallback_model = llama-3.3-70b-versatile  # automatic fallback on 503/over-capacity
 vision_model  = meta-llama/llama-4-scout-17b-16e-instruct
 whisper_model = whisper-large-v3-turbo

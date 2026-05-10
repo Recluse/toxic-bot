@@ -56,9 +56,22 @@ class SummarizerConfig:
 
 
 @dataclass(frozen=True)
+class OwnerConfig:
+    """
+    Identity of the bot's creator/operator. When a message comes from
+    owner_user_id (PM or group post) or is sent on behalf of owner_channel_id
+    (sender_chat in a group), the bot drops its toxic persona and replies as
+    a loyal, helpful assistant. Both fields default to 0 (= disabled).
+    """
+    user_id:    int
+    channel_id: int
+
+
+@dataclass(frozen=True)
 class AppConfig:
     telegram_token: str
     superadmin_ids: frozenset   # frozenset[int]
+    owner:          OwnerConfig
     bot:            BotConfig
     defaults:       DefaultChatConfig
     groq:           GroqConfig
@@ -86,6 +99,22 @@ def _cf_groq_url(account_id: str, gateway_id: str) -> str:
         f"https://gateway.ai.cloudflare.com/v1/"
         f"{account_id}/{gateway_id}/groq/openai/v1"
     )
+
+
+def _parse_int_env(name: str) -> int:
+    """
+    Parse an optional integer env variable (e.g. OWNER_USER_ID,
+    OWNER_CHANNEL_ID). Channel IDs in Telegram are negative, so we accept
+    a leading '-'. Returns 0 when unset, empty, or unparseable — that
+    sentinel disables the corresponding owner check downstream.
+    """
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return 0
+    try:
+        return int(raw)
+    except ValueError:
+        return 0
 
 
 def _parse_superadmin_ids() -> frozenset:
@@ -123,9 +152,15 @@ def load_config(ini_path: str = "config.ini") -> AppConfig:
             "SUPERADMIN_IDS is not set — superadmin commands will be unavailable"
         )
 
+    owner = OwnerConfig(
+        user_id=_parse_int_env("OWNER_USER_ID"),
+        channel_id=_parse_int_env("OWNER_CHANNEL_ID"),
+    )
+
     return AppConfig(
         telegram_token=telegram_token,
         superadmin_ids=superadmin_ids,
+        owner=owner,
         bot=BotConfig(
             max_history_messages=ini.getint("bot", "max_history_messages", fallback=20),
             default_lang=ini.get(          "bot", "default_lang",         fallback="en"),
@@ -140,7 +175,7 @@ def load_config(ini_path: str = "config.ini") -> AppConfig:
             min_words=         ini.getint("defaults", "min_words",           fallback=5),
         ),
         groq=GroqConfig(
-            model=        ini.get(      "groq", "model",         fallback="moonshotai/kimi-k2-instruct-0905"),
+            model=        ini.get(      "groq", "model",         fallback="openai/gpt-oss-120b"),
             fallback_model=ini.get(     "groq", "fallback_model", fallback="llama-3.3-70b-versatile"),
             vision_model= ini.get(      "groq", "vision_model",  fallback="meta-llama/llama-4-scout-17b-16e-instruct"),
             whisper_model=ini.get(      "groq", "whisper_model", fallback="whisper-large-v3-turbo"),
