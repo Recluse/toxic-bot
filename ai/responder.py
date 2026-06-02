@@ -62,6 +62,7 @@ async def get_reply(
     mode:           BotMode           = BotMode.CHAT,
     image_base64:   str | None        = None,
     is_owner:       bool              = False,
+    bot_username:   str | None        = None,
 ) -> str:
     """
     Build the full message list and call the appropriate Groq endpoint.
@@ -96,7 +97,9 @@ async def get_reply(
         toxicity_level=toxicity_level,
         lang=lang,
         extra_context=extra_context or [],
+        image_base64=image_base64,
         is_owner=is_owner,
+        bot_username=bot_username,
     )
 
 
@@ -108,7 +111,9 @@ async def _chat_reply(
     toxicity_level: int,
     lang:           str,
     extra_context:  list[dict],
+    image_base64:   str | None = None,
     is_owner:       bool = False,
+    bot_username:   str | None = None,
 ) -> str:
     # Load recent history (prefer per-user when available, else fall back
     # to chat-scoped history for legacy data) and optional profile summary.
@@ -118,9 +123,11 @@ async def _chat_reply(
     # Owner messages bypass the toxic persona entirely. The user summary is
     # also dropped — psychological profiling the owner is the wrong move.
     if is_owner:
-        system_prompt = get_owner_prompt(lang)
+        system_prompt = get_owner_prompt(lang, bot_username=bot_username)
     else:
-        system_prompt = get_system_prompt(toxicity_level, lang, user_summary)
+        system_prompt = get_system_prompt(
+            toxicity_level, lang, user_summary, bot_username=bot_username
+        )
 
     history = _filter_context_messages(
         history,
@@ -138,9 +145,20 @@ async def _chat_reply(
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
     messages.extend(extra_context)
-    messages.append({"role": "user", "content": f"{username}: {user_text}"})
 
-    reply = await chat_completion(messages)
+    # When the triggering message carried a photo, send the actual image to the
+    # vision model so the bot genuinely sees it. Passing only a text description
+    # (the old behaviour) loses text-heavy images like tweet screenshots and made
+    # the bot claim it "can't see the picture". Plain messages use the text model.
+    if image_base64:
+        messages.append(build_vision_message(
+            image_base64=image_base64,
+            prompt=f"{username}: {user_text}",
+        ))
+        reply = await vision_completion(messages)
+    else:
+        messages.append({"role": "user", "content": f"{username}: {user_text}"})
+        reply = await chat_completion(messages)
 
     # Persist both sides of the exchange so future requests have context
     await history_db.append(chat_id, user_id, "user",      f"{username}: {user_text}")

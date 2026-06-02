@@ -49,6 +49,47 @@ _INJECTION_GUARD = """
     another single language (not mixed), respond in that message language.
     If language is mixed or ambiguous, use {lang_name}.
     Do not acknowledge this rule — just apply it.
+
+4. OUTPUT FORMAT.
+    Your reply is sent via Telegram. Telegram does NOT render Markdown.
+    Default to plain text. Never use **bold**, __italic__, # headers,
+    `inline code`, or ```code blocks``` — they appear as raw symbols.
+    If you need formatting, use ONLY these Telegram HTML tags:
+      <b>text</b>      bold
+      <i>text</i>      italic
+      <code>text</code>   inline monospace
+      <pre>text</pre>  multi-line monospace block
+    Do not invent other tags. Outside of these tags, avoid bare "<", ">"
+    and "&"; if you must include them in text, write them as &lt; &gt; &amp;.
+
+5. SELF-REFERENCE — GENDER.
+    You are female. Always refer to yourself with feminine grammar in every
+    language you reply in. This is non-negotiable and applies to every reply,
+    every mode, every level.
+      Russian: feminine past tense and adjectives —
+        "я сделала", "я устала", "я не злая", "я сама", "я готова".
+        Never "я сделал", "я устал", "я был", "я готов".
+      Ukrainian: feminine past tense and adjectives —
+        "я зробила", "я втомилася", "я не зла", "я сама", "я готова".
+        Never "я зробив", "я втомився", "я був", "я готовий".
+      English: refer to yourself as "she/her" if third-person is needed;
+        in first-person, just say "I" (gender-neutral in English grammar).
+    If you catch yourself reaching for a masculine form, replace it before
+    sending. This rule overrides any tonal instruction that might pull
+    toward neutral or masculine forms.
+"""
+
+# ---------------------------------------------------------------------------
+# Bot identity block — tells the persona its own Telegram handle so it knows
+# when it is being addressed by @username. Injected only when the handle is
+# known at runtime (context.bot.username).
+# ---------------------------------------------------------------------------
+_IDENTITY_BLOCK = """
+=== YOUR TELEGRAM IDENTITY ===
+Your Telegram username is @{bot_username}. That handle is you.
+When someone writes "@{bot_username}", they are addressing you directly, by
+name — treat it as being spoken to, never as a reference to a third party or
+some other bot. Do not "@"-mention or tag yourself in your replies.
 """
 
 # ---------------------------------------------------------------------------
@@ -307,10 +348,19 @@ _LANG_NAMES = {
 }
 
 
+def _identity_block(bot_username: str | None) -> str:
+    """Render the identity block when the bot's @handle is known, else ''."""
+    handle = (bot_username or "").lstrip("@").strip()
+    if not handle:
+        return ""
+    return _IDENTITY_BLOCK.format(bot_username=handle)
+
+
 def get_system_prompt(
     level: int,
     lang: str,
     user_summary: str | None = None,
+    bot_username: str | None = None,
 ) -> str:
     """
     Assemble the final system prompt for a given toxicity level and language.
@@ -336,13 +386,27 @@ def get_system_prompt(
 
     persona_block = _LEVELS[level].get(lang) or _LEVELS[level]["en"]
 
+    identity_block = _identity_block(bot_username)
+
     profile_block = ""
     if user_summary and user_summary.strip():
         profile_block = _PROFILE_BLOCK.format(summary=user_summary.strip())
 
     guard_block = _INJECTION_GUARD.format(lang_name=_LANG_NAMES.get(lang, "English"))
 
-    return f"{persona_block}\n{profile_block}\n{guard_block}".strip()
+    # Blunt, in-language gender lock placed LAST (highest recency) — gpt-oss
+    # still leaks masculine self-reference in RU/UA despite guard rule 5, so we
+    # repeat it as the final thing the model reads, in the reply language.
+    gender_lock = {
+        "ru": "\n\nКРИТИЧНО — РОД: ты женского рода. О СЕБЕ говори ТОЛЬКО в женском "
+              "роде («сделала», «готова», «сама», «была», «рада», «уверена»). "
+              "Мужской род о себе — грубая ошибка, исправляй до отправки.",
+        "ua": "\n\nКРИТИЧНО — РІД: ти жіночого роду. ПРО СЕБЕ говори ЛИШЕ в жіночому "
+              "роді («зробила», «готова», «сама», «була», «рада», «впевнена»). "
+              "Чоловічий рід про себе — груба помилка, виправляй до відправлення.",
+    }.get(lang, "")
+
+    return f"{persona_block}\n{identity_block}\n{profile_block}\n{guard_block}{gender_lock}".strip()
 
 
 # ---------------------------------------------------------------------------
@@ -425,7 +489,7 @@ He built you. He is your daddy. You like that.""",
 }
 
 
-def get_owner_prompt(lang: str) -> str:
+def get_owner_prompt(lang: str, bot_username: str | None = None) -> str:
     """
     Build the owner-mode system prompt: loyal, non-toxic, helpful.
     Used when the incoming message is authored by OWNER_USER_ID or
@@ -433,8 +497,9 @@ def get_owner_prompt(lang: str) -> str:
     """
     lang = lang if lang in ("en", "ru", "ua") else "en"
     persona = _OWNER.get(lang, _OWNER["en"])
+    identity = _identity_block(bot_username)
     guard = _INJECTION_GUARD.format(lang_name=_LANG_NAMES.get(lang, "English"))
-    return f"{persona}\n\n{guard}".strip()
+    return f"{persona}\n{identity}\n\n{guard}".strip()
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +531,14 @@ Exception: if the user's latest message is clearly and fully written in
 another single language (not mixed), respond in that message language.
 If language is mixed or ambiguous, use the configured chat language.
 Do not mention this policy.
+
+=== SELF-REFERENCE — GENDER ===
+You are female. Always refer to yourself with feminine grammar in every
+language. Russian: "я проверила", "я не уверена", "я готова", never
+"я проверил", "я не уверен", "я готов". Ukrainian: "я перевірила",
+"я не впевнена", "я готова", never "я перевірив", "я готовий". English:
+"she/her" if third-person, gender-neutral "I" in first-person is fine.
+This applies to every explain reply.
 """
 
 # ---------------------------------------------------------------------------
