@@ -219,6 +219,12 @@ async def handle_message(
         photo_file_id = message.photo[-1].file_id
         text = (message.caption or "").strip()
 
+    # If the user has no photo of their own but is REPLYING to a photo (the image
+    # lives in the parent message — e.g. "@bot это правда?" под скрином), pick up
+    # THAT photo so the bot answers about the image instead of hallucinating.
+    if not photo_file_id and message.reply_to_message and message.reply_to_message.photo:
+        photo_file_id = message.reply_to_message.photo[-1].file_id
+
     if not text and not photo_file_id:
         return
 
@@ -450,7 +456,11 @@ async def handle_message(
                 prompt=(text or "Describe this image briefly in one sentence."),
             )]
             _description = await vision_completion(desc_messages)
-            text = f"[user sent a photo: {_description}]"
+            # Keep the user's question (the image itself also goes to the vision-native
+            # reply via image_base64); the description just enriches context so the bot
+            # answers about THIS image instead of hallucinating an unrelated topic.
+            text = (f"{text}\n[на изображении: {_description}]" if text
+                    else f"[пользователь прислал изображение: {_description}]")
             logger.debug("Vision description chat_id=%d user_id=%d", chat_id, user_id)
         except Exception as exc:
             logger.error("Vision failed chat_id=%d: %s", chat_id, exc)
