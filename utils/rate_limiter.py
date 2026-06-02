@@ -59,9 +59,30 @@ def check_and_set(chat_id: int, user_id: int, cooldown_sec: int) -> bool:
     return True
 
 
+_quip_cache: dict[tuple[int, int], _Entry] = {}
+
+
+def check_and_set_quip(chat_id: int, user_id: int, cooldown_sec: int) -> bool:
+    """
+    Gate the "slow down, one question a minute" canned reply: returns True at most
+    once per cooldown window per (chat_id, user_id), so a user who spam-pokes the
+    bot gets ONE quip — not one per poke. Returns False when cooldown_sec <= 0.
+    """
+    if cooldown_sec <= 0:
+        return False
+    key = (chat_id, user_id)
+    now = time.monotonic()
+    entry = _quip_cache.get(key)
+    if entry is not None and (now - entry.timestamp) < cooldown_sec:
+        return False
+    _quip_cache[key] = _Entry(timestamp=now)
+    return True
+
+
 def reset(chat_id: int, user_id: int) -> None:
     """Remove the cooldown entry for a user, allowing an immediate reply."""
     _cache.pop((chat_id, user_id), None)
+    _quip_cache.pop((chat_id, user_id), None)
 
 
 def reset_chat(chat_id: int) -> int:

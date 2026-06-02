@@ -47,7 +47,7 @@ from ai.transcriber import transcribe
 from ai.vision import build_vision_message, get_image_base64
 from db.chats import upsert_chat
 from i18n import get_text
-from utils.rate_limiter import check_and_set, check_pm_media_quota, check_pm_text_quota
+from utils.rate_limiter import check_and_set, check_and_set_quip, check_pm_media_quota, check_pm_text_quota
 from utils.prompt_injection_guard import (
     build_injection_payload,
     detect_prompt_injection,
@@ -70,6 +70,17 @@ _msg_counters: dict[int, int] = defaultdict(int)
 # messages may already exist, and a reply threaded to a now-stale message
 # reads as "the bot is necroposting".
 _RANDOM_REPLY_MAX_AGE_SEC = 30
+
+# Canned "you're poking too fast" replies, sent WITHOUT the LLM when a user hits
+# the per-user reply cooldown (one question a minute), in the bot's toxic voice.
+_COOLDOWN_QUIPS = [
+    "Тормози, гений. Один вопрос в минуту — я тебе не справочное бюро для нетерпеливых.",
+    "Не части. Минута паузы — за это время ты, может, и сам бы догадался.",
+    "Куда гонишь? Один вопрос в минуту. Дай мне насладиться тишиной от тебя.",
+    "Лимит — один вопрос в минуту. Ты не настолько интересен, чтобы дёргать меня чаще.",
+    "Полегче. Я тебе не автомат с газировкой — не жми на кнопку каждые пять секунд.",
+    "Минуту подожди. Очередь из твоих гениальных вопросов обрабатывается… медленно.",
+]
 
 
 def _message_age_seconds(message) -> float:
@@ -331,6 +342,17 @@ async def handle_message(
             logger.debug("Direct reply/mention, cooldown passed chat_id=%d user_id=%d", chat_id, user_id)
         else:
             logger.debug("Cooldown blocked chat_id=%d user_id=%d", chat_id, user_id)
+            # Don't burn an LLM call — toss a canned "one question a minute" quip,
+            # and only once per cooldown window (no quip-spam on rapid pokes).
+            if check_and_set_quip(chat_id, user_id, cooldown_sec):
+                try:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=random.choice(_COOLDOWN_QUIPS),
+                        reply_to_message_id=message.message_id,
+                    )
+                except Exception as exc:
+                    logger.debug("Cooldown quip send failed chat_id=%d: %s", chat_id, exc)
             return
 
     # --- 3. Frequency gate for non-bot-reply group messages ---
