@@ -288,6 +288,7 @@ async def handle_message(
         and word_count < min_words
         and not photo_file_id
         and not is_owner_trigger
+        and not mentions_bot
     ):
         logger.debug("Too short (%d < %d) — ignored chat_id=%d", word_count, min_words, chat_id)
         return
@@ -322,12 +323,12 @@ async def handle_message(
             "owner_reply_to_bot" if is_reply_to_bot else "owner_at_mention"
         )
 
-    # --- 2. Direct reply to bot → always reply if cooldown allows ---
-    elif is_reply_to_bot:
+    # --- 2. Direct reply to bot OR @-mention → always reply if cooldown allows ---
+    elif is_reply_to_bot or mentions_bot:
         if is_super or check_and_set(chat_id, user_id, cooldown_sec):
             should_reply = True
-            llm_reason = "direct_reply_to_bot_cooldown_passed"
-            logger.debug("Direct reply, cooldown passed chat_id=%d user_id=%d", chat_id, user_id)
+            llm_reason = "direct_reply_to_bot_cooldown_passed" if is_reply_to_bot else "at_mention_cooldown_passed"
+            logger.debug("Direct reply/mention, cooldown passed chat_id=%d user_id=%d", chat_id, user_id)
         else:
             logger.debug("Cooldown blocked chat_id=%d user_id=%d", chat_id, user_id)
             return
