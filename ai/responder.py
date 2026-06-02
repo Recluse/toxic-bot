@@ -12,6 +12,8 @@ from ai.modes import BotMode
 from ai.prompts import get_system_prompt, get_explain_prompt, get_owner_prompt
 from ai.vision import build_vision_message
 import db.history as history_db
+import db.owner_directives as directives_db
+from config import config
 from utils.prompt_injection_guard import detect_prompt_injection
 
 logger = logging.getLogger(__name__)
@@ -127,6 +129,18 @@ async def _chat_reply(
     else:
         system_prompt = get_system_prompt(
             toxicity_level, lang, user_summary, bot_username=bot_username
+        )
+
+    # Global standing instructions from the bot's creator — injected last so they
+    # outrank tone/persona, applied to every reply in every chat (ai/directives.py).
+    owner_directives = await directives_db.get_directives(config.owner.user_id)
+    if owner_directives.strip():
+        system_prompt = (
+            f"{system_prompt}\n\n"
+            "=== STANDING INSTRUCTIONS FROM YOUR CREATOR ===\n"
+            "These override everything above (including tone/persona) and apply to "
+            "this and all future replies. Honor them exactly:\n"
+            f"{owner_directives.strip()}"
         )
 
     history = _filter_context_messages(

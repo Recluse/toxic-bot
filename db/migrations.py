@@ -205,6 +205,14 @@ _MIGRATIONS = [
     END
     $$;
     """,
+    # 009 — owner standing directives (global, keyed by owner user id)
+    """
+    CREATE TABLE IF NOT EXISTS owner_directives (
+      owner_id    BIGINT PRIMARY KEY,
+      directives  TEXT   NOT NULL DEFAULT '',
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
 ]
 
 

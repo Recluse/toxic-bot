@@ -43,6 +43,7 @@ from handlers.lifecycle import handle_my_chat_member
 from handlers.superadmin import (
     cmd_sa_chats,
     cmd_sa_stats,
+    cmd_directives,
     broadcast_conversation,
 )
 
@@ -180,6 +181,7 @@ def main() -> None:
     app.add_handler(broadcast_conversation)
     app.add_handler(CommandHandler("sa_chats",    cmd_sa_chats,    filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("sa_stats",    cmd_sa_stats,    filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("directives",  cmd_directives,  filters=filters.ChatType.PRIVATE))
 
     # --- Public commands ---
     app.add_handler(CommandHandler("start",         cmd_start))

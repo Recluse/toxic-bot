@@ -24,6 +24,7 @@ from telegram.ext import (
 from config import config
 from db.chats import get_stats, list_chats, list_chats_with_stats
 from db.metrics import get_all as get_all_metrics
+import db.owner_directives as owner_directives_db
 
 logger = logging.getLogger(__name__)
 
@@ -372,6 +373,36 @@ async def cmd_sa_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     for part in _chunk_lines(lines):
         await update.message.reply_text(part, parse_mode="HTML")
     logger.info("Superadmin %s requested stats", update.effective_user.id)
+
+
+# --- /directives — view / clear the owner's global standing instructions ---
+
+async def cmd_directives(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show or clear the global standing instructions remembered from the owner."""
+    if not _is_superadmin(update.effective_user.id):
+        return
+    owner_id = config.owner.user_id
+    arg = (context.args[0].lower() if context.args else "")
+    if arg in ("clear", "wipe", "reset", "forget"):
+        await owner_directives_db.clear_directives(owner_id)
+        await update.message.reply_text("🧹 Стоячие указания очищены.")
+        logger.info("Superadmin %s cleared owner directives", update.effective_user.id)
+        return
+    directives = (await owner_directives_db.get_directives(owner_id)).strip()
+    if directives:
+        await update.message.reply_text(
+            "🧠 <b>Стоячие указания от создателя</b> "
+            "(учитываются во всех ответах):\n\n"
+            f"{html.escape(directives)}\n\n"
+            "<i>Очистить всё: /directives clear</i>",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            "Пока ничего не сохранено. Ответь боту реплаем с замечанием или "
+            "просьбой — он сам распознает указание и запомнит его."
+        )
+    logger.info("Superadmin %s viewed owner directives", update.effective_user.id)
 
 
 # --- /sa_broadcast ---

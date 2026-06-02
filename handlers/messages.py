@@ -27,17 +27,21 @@ import random
 from collections import defaultdict
 
 from telegram import Update
-from telegram.constants import ChatAction, ChatType
+from telegram.constants import ChatAction, ChatType, ParseMode
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
+import ai.directives as directives_ai
 import ai.summarizer as summarizer
 import db.chat_settings as settings_db
 import db.history as history_db
 import db.metrics as metrics_db
+import db.owner_directives as owner_directives_db
 import db.untouchables as untouchables_db
 import db.user_profiles as profiles_db
 from ai.client import vision_completion
 from ai.modes import BotMode
+from config import config
 from ai.responder import get_reply
 from ai.transcriber import transcribe
 from ai.vision import build_vision_message, get_image_base64
@@ -50,7 +54,7 @@ from utils.prompt_injection_guard import (
     log_injection_event,
     notify_superadmins_injection_event,
 )
-from utils.admin_check import is_owner
+from utils.admin_check import is_owner, is_superadmin
 from utils.reply_chain import collect_chain
 from utils.tg_sender import resolve_message_actor
 
@@ -61,8 +65,11 @@ logger = logging.getLogger(__name__)
 _msg_counters: dict[int, int] = defaultdict(int)
 
 # Random auto-replies are allowed only for fresh messages to avoid necroposting
-# old threads after reconnects/restarts or delayed updates.
-_RANDOM_REPLY_MAX_AGE_SEC = 120
+# old threads after reconnects/restarts or delayed updates. The cap is tight
+# on purpose — by the time we react to the trigger message, several newer
+# messages may already exist, and a reply threaded to a now-stale message
+# reads as "the bot is necroposting".
+_RANDOM_REPLY_MAX_AGE_SEC = 30
 
 
 def _message_age_seconds(message) -> float:
@@ -106,13 +113,25 @@ async def handle_message(
 
     # Owner check — toxic persona is replaced with a loyal-assistant prompt
     # for messages from OWNER_USER_ID or sent on behalf of OWNER_CHANNEL_ID.
+    # Auto-forwards from the owner's channel into its linked discussion group
+    # are broadcasts to subscribers, not messages directed at the bot — they
+    # carry sender_chat = OWNER_CHANNEL_ID + is_automatic_forward=True, and
+    # must NOT enter owner mode (would otherwise daddy-mode every channel post
+    # publicly in the discussion group).
     sender_chat_id = message.sender_chat.id if message.sender_chat else None
-    from_owner = is_owner(user.id if user else None, sender_chat_id)
+    is_linked_channel_post = bool(getattr(message, "is_automatic_forward", False))
+    from_owner = (
+        is_owner(user.id if user else None, sender_chat_id)
+        and not is_linked_channel_post
+    )
     if from_owner:
         logger.info(
             "Owner detected chat_id=%d user_id=%s sender_chat_id=%s",
             chat_id, user.id if user else None, sender_chat_id,
         )
+
+    # Superadmins bypass every rate limit / hourly quota — "no limits, only him".
+    is_super = is_superadmin(user_id)
 
     # --- Load settings and auto-register chat ---
     settings = await settings_db.get_or_create(chat_id)
@@ -154,7 +173,7 @@ async def handle_message(
     if message.text:
         await metrics_db.increment("processed_text")
         await metrics_db.increment_chat_metric(chat_id, "processed_text")
-        if is_pm and not check_pm_text_quota(chat_id, user_id):
+        if is_pm and not is_super and not check_pm_text_quota(chat_id, user_id):
             await message.reply_text(get_text("pm_text_hour_limit", lang))
             return
         text = message.text.strip()
@@ -162,7 +181,7 @@ async def handle_message(
     elif message.voice or message.audio:
         await metrics_db.increment("processed_voice")
         await metrics_db.increment_chat_metric(chat_id, "processed_voice")
-        if is_pm and not check_pm_media_quota(chat_id, user_id):
+        if is_pm and not is_super and not check_pm_media_quota(chat_id, user_id):
             await message.reply_text(get_text("pm_media_hour_limit", lang))
             return
 
@@ -180,7 +199,7 @@ async def handle_message(
     elif message.photo:
         await metrics_db.increment("processed_image")
         await metrics_db.increment_chat_metric(chat_id, "processed_image")
-        if is_pm and not check_pm_media_quota(chat_id, user_id):
+        if is_pm and not is_super and not check_pm_media_quota(chat_id, user_id):
             await message.reply_text(get_text("pm_media_hour_limit", lang))
             return
 
@@ -193,11 +212,19 @@ async def handle_message(
         return
 
     bot_id          = context.bot.id
+    bot_username    = (getattr(context.bot, "username", None) or "").lower()
     is_reply_to_bot = (
         message.reply_to_message is not None
         and message.reply_to_message.from_user is not None
         and message.reply_to_message.from_user.id == bot_id
     )
+    mentions_bot = bool(bot_username) and bool(text) and (
+        f"@{bot_username}" in text.lower()
+    )
+    # Owner trigger: in groups the bot answers any owner message only when the
+    # owner explicitly addresses the bot (reply to bot message OR @-mention).
+    # min_words / frequency / cooldown are all bypassed in that case.
+    is_owner_trigger = from_owner and (is_reply_to_bot or mentions_bot)
 
     detection = detect_prompt_injection(text)
     if detection.blocked:
@@ -256,7 +283,12 @@ async def handle_message(
         "voice" if message.voice else "photo" if message.photo else "text",
     )
 
-    if not is_pm and word_count < min_words and not photo_file_id:
+    if (
+        not is_pm
+        and word_count < min_words
+        and not photo_file_id
+        and not is_owner_trigger
+    ):
         logger.debug("Too short (%d < %d) — ignored chat_id=%d", word_count, min_words, chat_id)
         return
 
@@ -268,7 +300,6 @@ async def handle_message(
         getattr(message, "forward_sender_name", None),
         getattr(message, "forward_date", None),
     ])
-    is_linked_channel_post = bool(getattr(message, "is_automatic_forward", False))
     is_forward_like = is_forwarded or is_linked_channel_post
 
     # --- Collect reply chain context ---
@@ -284,9 +315,16 @@ async def handle_message(
         should_reply = True
         llm_reason = "pm_always_reply"
 
+    # --- Owner addresses the bot (reply-to-bot or @mention): always reply, no gates ---
+    elif is_owner_trigger:
+        should_reply = True
+        llm_reason = (
+            "owner_reply_to_bot" if is_reply_to_bot else "owner_at_mention"
+        )
+
     # --- 2. Direct reply to bot → always reply if cooldown allows ---
     elif is_reply_to_bot:
-        if check_and_set(chat_id, user_id, cooldown_sec):
+        if is_super or check_and_set(chat_id, user_id, cooldown_sec):
             should_reply = True
             llm_reason = "direct_reply_to_bot_cooldown_passed"
             logger.debug("Direct reply, cooldown passed chat_id=%d user_id=%d", chat_id, user_id)
@@ -350,6 +388,22 @@ async def handle_message(
                 )
             )
 
+    # Capture standing instructions the owner gives by addressing the bot
+    # (reply-to-bot or @mention). The owner's words are distilled and remembered
+    # globally so they steer every future reply — see ai/directives.py.
+    if is_owner_trigger and message.text and message.text.strip():
+        _owner_id = config.owner.user_id
+        _owner_msg = message.text.strip()
+        _existing_directives = await owner_directives_db.get_directives(_owner_id)
+        try:
+            context.application.create_task(
+                directives_ai.update_directives(_owner_id, _owner_msg, _existing_directives)
+            )
+        except Exception:
+            asyncio.create_task(
+                directives_ai.update_directives(_owner_id, _owner_msg, _existing_directives)
+            )
+
     # --- Fire the LLM call ---
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
@@ -391,6 +445,7 @@ async def handle_message(
             mode=BotMode.CHAT,
             image_base64=image_base64,
             is_owner=from_owner,
+            bot_username=getattr(context.bot, "username", None),
         )
     except Exception as exc:
         logger.error("get_reply failed chat_id=%d: %s", chat_id, exc)
@@ -400,9 +455,34 @@ async def handle_message(
     # message.reply_text — if the triggering message was deleted before
     # this point (e.g. by a /toxic or /explain handler), reply_text silently
     # drops the reply_to_message_id and sends to chat without threading.
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=reply,
-        reply_to_message_id=message.message_id,
-    )
+    # Send as Telegram HTML so <b>/<i>/<code>/<pre> tags from the prompt
+    # render properly; fall back to plain text if the model produces
+    # tag-like text that Telegram cannot parse.
+    #
+    # ALL replies thread to the message that triggered them — including
+    # random frequency-gate replies. Necroposting is already prevented by
+    # the _RANDOM_REPLY_MAX_AGE_SEC age gate above (random replies only fire
+    # on messages younger than 30s), so threading reads as a timely reply,
+    # not as the bot answering an "old" message.
+    reply_to = message.message_id
+    try:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=reply,
+            reply_to_message_id=reply_to,
+            parse_mode=ParseMode.HTML,
+        )
+    except BadRequest as exc:
+        if "parse" in str(exc).lower() or "entity" in str(exc).lower():
+            logger.warning(
+                "HTML parse failed chat_id=%d — retrying as plain text: %s",
+                chat_id, exc,
+            )
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=reply,
+                reply_to_message_id=reply_to,
+            )
+        else:
+            raise
     await metrics_db.increment_chat_metric(chat_id, "chat_replies_sent")
