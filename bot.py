@@ -11,9 +11,11 @@ Responsibilities:
 """
 
 import logging
+import os
 from datetime import datetime
 
 from telegram import Update
+from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
     ChatMemberHandler,
@@ -162,9 +164,20 @@ def _add_settings_command(app: Application) -> None:
 
 def main() -> None:
     """Build and run the bot application."""
+    # Explicit finite timeouts so a wedged long-poll (e.g. the egress proxy silently
+    # dropping the getUpdates connection) raises ReadTimeout and PTB reconnects, instead
+    # of hanging forever in epoll_wait. get_updates read_timeout must exceed run_polling's
+    # `timeout`. Proxy is taken from HTTPS_PROXY/HTTP_PROXY env (the k8s/recluse egress proxy).
+    _proxy = (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+              or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or None)
+    _req_kw = dict(connect_timeout=10.0, write_timeout=20.0, pool_timeout=10.0)
+    if _proxy:
+        _req_kw["proxy"] = _proxy
     app = (
         Application.builder()
         .token(config.telegram_token)
+        .request(HTTPXRequest(read_timeout=20.0, **_req_kw))
+        .get_updates_request(HTTPXRequest(read_timeout=45.0, **_req_kw))
         .post_init(_on_startup)
         .post_shutdown(_on_shutdown)
         .build()
@@ -208,7 +221,12 @@ def main() -> None:
     )
 
     logger.info("Starting polling")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        timeout=30,            # long-poll seconds (< get_updates read_timeout=45)
+        poll_interval=1.0,
+        bootstrap_retries=-1,  # retry forever on startup network errors
+    )
 
 
 if __name__ == "__main__":
