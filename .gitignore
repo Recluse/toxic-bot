@@ -1,81 +1,38 @@
-# Secrets and local config
+.git/
 .env
-
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg
-*.egg-info/
-dist/
-build/
-eggs/
-parts/
-var/
-sdist/
-wheels/
-pip-wheel-metadata/
-*.manifest
-*.spec
-
-# Virtual environments
+.env.*
+!.env.example
 .venv/
-.venv*/
 venv/
 env/
 ENV/
-
-# Temporary local files
-*.tmp
-*.temp
-tmp/
-temp/
-.tmp/
-.tmp_pkg/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-nosetests.xml
-coverage.xml
-*.cover
-
-# IDEs
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-.DS_Store
-
-# Logs
+__pycache__/
+*.py[cod]
 *.log
 logs/
-
-# systemd local overrides
-*.service.local
-
-# Database dumps and backups
-*.sql
-*.dump
+log/
+*.session
+*.session-journal
+*.db
+*.sqlite
+*.sqlite3
 *.bak
-
-# Jupyter
-.ipynb_checkpoints/
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# ruff / black
-.ruff_cache/
-
-# Local agent workspace artifacts
-rules
-docs/
-plan/
+*.bak-*
+back/
+back2/
+backup/
+node_modules/
+*.pem
+*.key
+*.creds
+credentials.json
+service_account*.json
+*credentials*.json
+client_secret*.json
+token.json
+cache.json
+*.cache
+cache/
+.DS_Store
+.idea/
+.vscode/

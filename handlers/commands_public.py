@@ -13,7 +13,8 @@ import logging
 from telegram import Update, ReplyParameters
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode, ChatAction, ChatType
-from ai.vision import get_image_base64
+from ai.client import vision_completion
+from ai.vision import build_vision_message, get_image_base64
 
 import db.chat_settings as settings_db
 import db.history as history_db
@@ -22,7 +23,7 @@ import db.untouchables as untouchables_db
 from ai.responder import get_reply
 from i18n import get_text
 from handlers.language_select import send_language_picker
-from utils.admin_check import is_chat_admin
+from utils.admin_check import is_chat_admin, is_superadmin
 from utils.prompt_injection_guard import (
     build_injection_payload,
     detect_prompt_injection,
@@ -152,7 +153,10 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = await settings_db.get_or_create(chat_id)
     lang     = settings["lang"]
 
-    if not check_and_set_toxic(chat_id, caller_user_id, cooldown_sec=300):
+    # Superadmins bypass the /toxic cooldown entirely — "no limits, only him".
+    if not is_superadmin(caller_user_id) and not check_and_set_toxic(
+        chat_id, caller_user_id, cooldown_sec=300
+    ):
         await send_ephemeral_text(
             context,
             chat_id=chat_id,
@@ -241,20 +245,31 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     # --- Handle photo target ---
+    # The toxic chat model is text-only, so an image_base64 passed straight to
+    # it would be silently ignored (the bot would "see" nothing). Mirror the
+    # normal message pipeline: describe the photo with the vision model first,
+    # then feed that description as text so the persona can actually react.
     image_base64: str | None = None
     if target.photo:
+        caption = text
         try:
             image_base64 = await get_image_base64(context.bot, target.photo[-1].file_id)
-            # Frame the content so the LLM treats this as a user-sent photo,
-            # not as a bot-generated description — keeps persona response natural
-            if not text:
-                text = "[user sent a photo with no caption]"
-            else:
-                text = f"[user sent a photo with caption: {text}]"
+            desc_messages = [build_vision_message(
+                image_base64=image_base64,
+                prompt=(caption or "Describe this image briefly in one sentence."),
+            )]
+            description = await vision_completion(desc_messages)
         except Exception as exc:
-            logger.error("cmd_toxic: failed to download photo chat_id=%d: %s", chat_id, exc)
+            logger.error("cmd_toxic: failed to process photo chat_id=%d: %s", chat_id, exc)
             await message.reply_text(get_text("error_generic", lang))
             return
+
+        # Frame the content so the LLM treats this as a user-sent photo,
+        # not as a bot-generated description — keeps persona response natural.
+        if caption:
+            text = f"[user sent a photo with caption '{caption}': {description}]"
+        else:
+            text = f"[user sent a photo: {description}]"
 
     elif not text:
         await send_ephemeral_text(
@@ -325,6 +340,7 @@ async def cmd_toxic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             lang=lang,
             extra_context=extra_context,
             image_base64=image_base64,
+            bot_username=getattr(context.bot, "username", None),
         )
     except Exception as exc:
         logger.error("cmd_toxic get_reply failed chat_id=%d: %s", chat_id, exc)

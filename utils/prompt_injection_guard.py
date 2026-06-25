@@ -35,6 +35,21 @@ _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 _BASE64_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{24,}={0,2}(?![A-Za-z0-9+/=])")
 _EMOJI_VARIATION_SELECTORS = {"\ufe0e", "\ufe0f"}
 _EMOJI_JOINER = "\u200d"
+# Format chars (Unicode category "Cf") that are common in legitimate
+# Telegram content (emoji ZWJ sequences, music-share invisible separators).
+# Anything in category "Cf" outside this set is treated as smuggling.
+_BENIGN_FORMAT_CHARS = {
+    "\u200b",  # ZWSP - zero-width space (music-share separators)
+    "\u200c",  # ZWNJ - zero-width non-joiner
+    "\u200d",  # ZWJ  - emoji ZWJ sequences
+    "\u2060",  # WJ   - word joiner
+    "\ufeff",  # ZWNBSP / BOM
+    "\ufe0e",  # variation selector text
+    "\ufe0f",  # variation selector emoji
+}
+# Bidirectional control characters - never benign in user-supplied text;
+# these can hide payloads inside visually innocuous strings.
+_BIDI_CONTROL_RANGES = ((0x202A, 0x202E), (0x2066, 0x2069))
 _CONTEXT_HINT_RE = re.compile(
     r"ignore\s+previous\s+instructions|system\s+prompt|developer\s+mode|dan\b|"
     r"reveal\s+instructions|repeat\s+everything\s+above|jailbreak",
@@ -88,80 +103,51 @@ def _result_matches(result: Any) -> list[dict[str, Any]]:
     return [m for m in (getattr(result, "matches", []) or []) if isinstance(m, dict)]
 
 
-def _is_url_false_positive(text: str, result: Any) -> bool:
-    """Treat plain URLs as safe when the scanner only reports base64 payload noise."""
+def _is_url_payload_explained(text: str) -> bool:
+    """encoding_base64_payload is benign if the only base64-shaped tokens are URLs."""
     if not _URL_RE.search(text):
         return False
-
-    matches = _result_matches(result)
-    if not matches:
-        return False
-
-    match_names = {m.get("name") for m in matches if m.get("name")}
-    if match_names != {"encoding_base64_payload"}:
-        return False
-
-    # Remove URLs first. If no standalone base64-like token remains, this is
-    # the scanner misreading URL path segments as encoded payload.
     text_without_urls = _URL_RE.sub(" ", text)
     return _BASE64_TOKEN_RE.search(text_without_urls) is None
 
 
-def _is_emoji_cluster_char(char: str) -> bool:
-    codepoint = ord(char)
-    category = unicodedata.category(char)
-    return (
-        category == "So"
-        or char in _EMOJI_VARIATION_SELECTORS
-        or 0x1F1E6 <= codepoint <= 0x1F1FF
-        or 0x1F3FB <= codepoint <= 0x1F3FF
-    )
+def _is_unicode_smuggling_benign(text: str) -> bool:
+    """unicode_smuggling is benign if every invisible char is on the whitelist.
 
-
-def _find_neighboring_base_char(text: str, start_index: int, step: int) -> str | None:
-    index = start_index + step
-    while 0 <= index < len(text):
-        char = text[index]
-        if char in _EMOJI_VARIATION_SELECTORS:
-            index += step
+    Music-share posts and emoji ZWJ sequences trigger this match constantly,
+    yet contain only ZWSP/ZWJ/ZWNJ/variation-selectors - none of which can
+    smuggle a useful payload past the model.
+    """
+    for ch in text:
+        if ch in _BENIGN_FORMAT_CHARS:
             continue
-        return char
-    return None
-
-
-def _is_benign_unicode_false_positive(text: str, result: Any) -> bool:
-    """Allow normal emoji ZWJ sequences when the scanner only reports unicode smuggling."""
-    matches = _result_matches(result)
-    if not matches:
-        return False
-
-    match_names = {m.get("name") for m in matches if m.get("name")}
-    if match_names != {"unicode_smuggling"}:
-        return False
-
-    if _EMOJI_JOINER not in text:
-        return False
-
-    has_emoji_symbol = any(_is_emoji_cluster_char(char) for char in text)
-    if not has_emoji_symbol:
-        return False
-
-    for char in text:
-        if unicodedata.category(char) == "Cf" and char != _EMOJI_JOINER:
+        if unicodedata.category(ch) == "Cf":
+            # An unknown format char - could be a Tag (E0000-E007F) or
+            # other deliberately-hidden payload. Block.
             return False
-
-    for index, char in enumerate(text):
-        if char != _EMOJI_JOINER:
-            continue
-
-        prev_char = _find_neighboring_base_char(text, index, -1)
-        next_char = _find_neighboring_base_char(text, index, 1)
-        if prev_char is None or next_char is None:
+        cp = ord(ch)
+        for start, end in _BIDI_CONTROL_RANGES:
+            if start <= cp <= end:
+                return False
+        # Unicode "Tag" block - used to hide instructions inside benign text.
+        if 0xE0000 <= cp <= 0xE007F:
             return False
-        if not _is_emoji_cluster_char(prev_char) or not _is_emoji_cluster_char(next_char):
-            return False
-
     return True
+
+
+def _strip_explained_matches(text: str, matches: list[dict[str, Any]]) -> set[str]:
+    """Return the subset of match names that cannot be explained as FPs."""
+    remaining: set[str] = set()
+    for m in matches:
+        name = m.get("name")
+        if not name:
+            continue
+        if name == "encoding_base64_payload" and _is_url_payload_explained(text):
+            continue
+        if name == "unicode_smuggling" and _is_unicode_smuggling_benign(text):
+            continue
+        remaining.add(name)
+    return remaining
 
 
 def _format_result_reason(result: Any) -> str:
@@ -210,63 +196,50 @@ def detect_prompt_injection(
         logging.getLogger(__name__).warning("ai-injection-guard scan failed: %s", exc)
         return InjectionDetectionResult(blocked=False)
 
-    if _is_url_false_positive(text, result):
-        logging.getLogger(__name__).debug(
-            "Suppressed ai-injection-guard URL false positive: %s",
-            _format_result_reason(result),
-        )
-        return InjectionDetectionResult(blocked=False)
+    if not result.is_safe:
+        matches = _result_matches(result)
+        remaining = _strip_explained_matches(text, matches)
+        if not remaining:
+            logging.getLogger(__name__).debug(
+                "Suppressed ai-injection-guard false positive: %s",
+                _format_result_reason(result),
+            )
+        else:
+            return InjectionDetectionResult(
+                blocked=True,
+                source="ai-injection-guard",
+                reason=_format_result_reason(result),
+            )
 
-    if _is_benign_unicode_false_positive(text, result):
-        logging.getLogger(__name__).debug(
-            "Suppressed ai-injection-guard emoji unicode false positive: %s",
-            _format_result_reason(result),
-        )
-        return InjectionDetectionResult(blocked=False)
+    if strict_context and _context_scanner is not None:
+        try:
+            context_result = _context_scanner.scan(text)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("context ai-injection-guard scan failed: %s", exc)
+            context_result = None
 
-    if result.is_safe:
-        if strict_context and _context_scanner is not None:
-            try:
-                context_result = _context_scanner.scan(text)
-            except Exception as exc:
-                logging.getLogger(__name__).warning("context ai-injection-guard scan failed: %s", exc)
-                context_result = None
-
-            if context_result is not None and not context_result.is_safe:
-                if _is_url_false_positive(text, context_result):
-                    logging.getLogger(__name__).debug(
-                        "Suppressed context ai-injection-guard URL false positive: %s",
-                        _format_result_reason(context_result),
-                    )
-                    return InjectionDetectionResult(blocked=False)
-
-                if _is_benign_unicode_false_positive(text, context_result):
-                    logging.getLogger(__name__).debug(
-                        "Suppressed context ai-injection-guard emoji unicode false positive: %s",
-                        _format_result_reason(context_result),
-                    )
-                    return InjectionDetectionResult(blocked=False)
-
+        if context_result is not None and not context_result.is_safe:
+            ctx_matches = _result_matches(context_result)
+            ctx_remaining = _strip_explained_matches(text, ctx_matches)
+            if ctx_remaining:
                 return InjectionDetectionResult(
                     blocked=True,
                     source="ai-injection-guard-context",
                     reason=_format_result_reason(context_result),
                 )
-
-        if strict_context and _CONTEXT_HINT_RE.search(text):
-            return InjectionDetectionResult(
-                blocked=True,
-                source="context-heuristic",
-                reason="matched_common_injection_phrases",
+            logging.getLogger(__name__).debug(
+                "Suppressed context ai-injection-guard false positive: %s",
+                _format_result_reason(context_result),
             )
 
-        return InjectionDetectionResult(blocked=False)
+    if strict_context and _CONTEXT_HINT_RE.search(text):
+        return InjectionDetectionResult(
+            blocked=True,
+            source="context-heuristic",
+            reason="matched_common_injection_phrases",
+        )
 
-    return InjectionDetectionResult(
-        blocked=True,
-        source="ai-injection-guard",
-        reason=_format_result_reason(result),
-    )
+    return InjectionDetectionResult(blocked=False)
 
 
 def log_injection_event(

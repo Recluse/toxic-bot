@@ -18,10 +18,12 @@ from telegram import Update
 from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     ChatMemberHandler,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
+    TypeHandler,
     filters,
 )
 
@@ -162,6 +164,31 @@ def _add_settings_command(app: Application) -> None:
     app.add_handler(CommandHandler("settings", cmd_settings))
 
 
+# --- anti-flood / ban guard (added 2026-06-03) ---
+_BANNED_IDS = {376895691}
+_flood_hits = {}
+_FLOOD_MAX = 12
+_FLOOD_WINDOW = 10.0
+
+
+async def _antiflood_guard(update: Update, context) -> None:
+    user = update.effective_user
+    if user is None:
+        return
+    uid = user.id
+    if uid in _BANNED_IDS:
+        raise ApplicationHandlerStop
+    import time as _t
+    now = _t.monotonic()
+    hits = _flood_hits.setdefault(uid, [])
+    cutoff = now - _FLOOD_WINDOW
+    while hits and hits[0] < cutoff:
+        hits.pop(0)
+    hits.append(now)
+    if len(hits) > _FLOOD_MAX:
+        raise ApplicationHandlerStop
+
+
 def main() -> None:
     """Build and run the bot application."""
     # Explicit finite timeouts so a wedged long-poll (e.g. the egress proxy silently
@@ -219,6 +246,9 @@ def main() -> None:
             handle_message,
         )
     )
+
+    # anti-flood / ban guard runs before all other handlers (group -1)
+    app.add_handler(TypeHandler(Update, _antiflood_guard), group=-1)
 
     logger.info("Starting polling")
     app.run_polling(

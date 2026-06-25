@@ -37,6 +37,7 @@ from utils.prompt_injection_guard import (
     log_injection_event,
     notify_superadmins_injection_event,
 )
+from utils.admin_check import is_superadmin
 from utils.rate_limiter import check_and_set_explain, check_pm_explain_quota, check_pm_media_quota
 from utils.tg_sender import resolve_message_actor
 from utils.tg_safe import send_ephemeral_text
@@ -89,11 +90,15 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     settings    = await settings_db.get_or_create(chat.id)
     lang        = settings["lang"]
     is_pm       = chat.type == ChatType.PRIVATE
+    # Superadmins bypass every /explain limit / quota — "no limits, only him".
+    is_super    = is_superadmin(actor_id)
 
     await metrics_db.increment("explain_requests")
     await metrics_db.increment_chat_metric(chat.id, "explain_commands")
 
-    if not is_pm:
+    if is_super:
+        pass
+    elif not is_pm:
         explain_cd_min = int(settings.get("explain_cooldown_min", 10))
         if not check_and_set_explain(chat.id, actor_id, explain_cd_min * 60):
             await send_ephemeral_text(
@@ -138,7 +143,7 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     image_base64: str | None = None
 
     if target.voice or target.audio:
-        if is_pm and not check_pm_media_quota(chat.id, actor_id):
+        if is_pm and not is_super and not check_pm_media_quota(chat.id, actor_id):
             await message.reply_text(get_text("pm_media_hour_limit", lang))
             return
 
@@ -153,7 +158,7 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
 
     elif target.photo:
-        if is_pm and not check_pm_media_quota(chat.id, actor_id):
+        if is_pm and not is_super and not check_pm_media_quota(chat.id, actor_id):
             await message.reply_text(get_text("pm_media_hour_limit", lang))
             return
 

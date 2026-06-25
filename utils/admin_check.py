@@ -79,6 +79,18 @@ def is_owner(user_id: int | None, sender_chat_id: int | None = None) -> bool:
     return False
 
 
+def is_superadmin(user_id: int | None) -> bool:
+    """
+    True if user_id is a configured personal superadmin.
+
+    Superadmins bypass every rate limit and quota (cooldowns, hourly PM
+    quotas, /toxic and /explain throttles). This is the "no limits, only
+    for him" check — channel-based superadmins are intentionally not
+    included here, since limits are keyed on a personal user_id.
+    """
+    return user_id is not None and user_id in _SUPERADMIN_IDS
+
+
 def _is_superadmin_channel(update: Update) -> bool:
     """
     Check if the message was sent on behalf of a superadmin channel.
