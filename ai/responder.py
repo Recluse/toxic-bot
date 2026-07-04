@@ -99,7 +99,6 @@ async def get_reply(
         toxicity_level=toxicity_level,
         lang=lang,
         extra_context=extra_context or [],
-        image_base64=image_base64,
         is_owner=is_owner,
         bot_username=bot_username,
     )
@@ -113,7 +112,6 @@ async def _chat_reply(
     toxicity_level: int,
     lang:           str,
     extra_context:  list[dict],
-    image_base64:   str | None = None,
     is_owner:       bool = False,
     bot_username:   str | None = None,
 ) -> str:
@@ -160,19 +158,16 @@ async def _chat_reply(
     messages.extend(history)
     messages.extend(extra_context)
 
-    # When the triggering message carried a photo, send the actual image to the
-    # vision model so the bot genuinely sees it. Passing only a text description
-    # (the old behaviour) loses text-heavy images like tweet screenshots and made
-    # the bot claim it "can't see the picture". Plain messages use the text model.
-    if image_base64:
-        messages.append(build_vision_message(
-            image_base64=image_base64,
-            prompt=f"{username}: {user_text}",
-        ))
-        reply = await vision_completion(messages)
-    else:
-        messages.append({"role": "user", "content": f"{username}: {user_text}"})
-        reply = await chat_completion(messages)
+    # The reply is ALWAYS composed by the text model. If the message carried a
+    # photo, the vision model already turned it into a neutral description upstream
+    # (handlers/messages.py) and that description is embedded in user_text — so the
+    # persona never touches the raw image and the vision model never sees the
+    # persona (which is what made Llama-4 Scout refuse with "не могу комментировать
+    # изображения"). Text-heavy images survive because the describe prompt quotes
+    # any visible text.
+    user_turn = f"{username}: {user_text}"
+    messages.append({"role": "user", "content": user_turn})
+    reply = await chat_completion(messages)
 
     # Persist both sides of the exchange so future requests have context
     await history_db.append(chat_id, user_id, "user",      f"{username}: {user_text}")

@@ -28,7 +28,7 @@ from collections import defaultdict
 
 from telegram import Update
 from telegram.constants import ChatAction, ChatType, ParseMode
-from telegram.error import BadRequest
+from telegram.error import BadRequest, NetworkError, TimedOut
 from telegram.ext import ContextTypes
 
 import ai.directives as directives_ai
@@ -81,6 +81,19 @@ _COOLDOWN_QUIPS = [
     "Полегче. Я тебе не автомат с газировкой — не жми на кнопку каждые пять секунд.",
     "Минуту подожди. Очередь из твоих гениальных вопросов обрабатывается… медленно.",
 ]
+
+# Neutral, persona-free prompt for the vision DESCRIBE pass. The vision model
+# ONLY ever sees the raw image + this instruction — never the user's own text and
+# never the toxic persona — so it doesn't refuse ("не могу комментировать
+# изображения"). The resulting factual description is handed to the TEXT model,
+# which composes the actual reply. Asking it to quote any visible text keeps
+# text-heavy images (tweet screenshots, memes) usable downstream.
+_VISION_DESCRIBE_PROMPT = (
+    "Опиши это изображение максимально подробно и фактологично: что на нём "
+    "изображено — объекты, люди, происходящее, стиль. Если на картинке есть "
+    "текст, приведи его дословно. Только нейтральное описание, без оценок, "
+    "шуток и комментариев."
+)
 
 
 def _message_age_seconds(message) -> float:
@@ -222,6 +235,12 @@ async def handle_message(
     # If the user has no photo of their own but is REPLYING to a photo (the image
     # lives in the parent message — e.g. "@bot это правда?" под скрином), pick up
     # THAT photo so the bot answers about the image instead of hallucinating.
+    #
+    # This DELIBERATELY includes forwarded parents: when someone comments in the
+    # thread under a forwarded post, the forwarded image is context the bot must
+    # read AND recognise (owner rule). We do not spontaneously reply to a bare
+    # forward (that's gated below via is_forward_like), but a photo in the thread
+    # above a real reply is always fair game for vision.
     if not photo_file_id and message.reply_to_message and message.reply_to_message.photo:
         photo_file_id = message.reply_to_message.photo[-1].file_id
 
@@ -434,7 +453,13 @@ async def handle_message(
             )
 
     # --- Fire the LLM call ---
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    # The typing indicator is cosmetic: a transient network timeout here must NOT
+    # abort a reply we've already decided to send (recluse's TG egress is flaky and
+    # send_chat_action has crashed the whole handler on a blip — see 2026-06-03).
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    except Exception as exc:
+        logger.debug("send_chat_action failed (non-fatal) chat_id=%d: %s", chat_id, exc)
 
     logger.info(
         "LLM request mode=chat chat_id=%d user_id=%d reason=%s type=%s channel_sender=%s forward_like=%s",
@@ -448,17 +473,17 @@ async def handle_message(
     await metrics_db.increment_chat_metric(chat_id, "chat_llm_requests")
 
     # If the selected message is a photo, describe it now (post-frequency gating).
+    # Only the image + a neutral describe prompt go to the vision model — the
+    # user's text and the persona stay out of it, so it never refuses. The
+    # description is folded into `text`, and the TEXT model composes the reply.
     if photo_file_id:
         try:
             image_base64 = await get_image_base64(context.bot, photo_file_id)
             desc_messages = [build_vision_message(
                 image_base64=image_base64,
-                prompt=(text or "Describe this image briefly in one sentence."),
+                prompt=_VISION_DESCRIBE_PROMPT,
             )]
             _description = await vision_completion(desc_messages)
-            # Keep the user's question (the image itself also goes to the vision-native
-            # reply via image_base64); the description just enriches context so the bot
-            # answers about THIS image instead of hallucinating an unrelated topic.
             text = (f"{text}\n[на изображении: {_description}]" if text
                     else f"[пользователь прислал изображение: {_description}]")
             logger.debug("Vision description chat_id=%d user_id=%d", chat_id, user_id)
@@ -476,7 +501,6 @@ async def handle_message(
             lang=lang,
             extra_context=extra_context,
             mode=BotMode.CHAT,
-            image_base64=image_base64,
             is_owner=from_owner,
             bot_username=getattr(context.bot, "username", None),
         )
@@ -498,24 +522,28 @@ async def handle_message(
     # on messages younger than 30s), so threading reads as a timely reply,
     # not as the bot answering an "old" message.
     reply_to = message.message_id
+
+    async def _deliver(**kwargs):
+        # Retry once on a transient network timeout — recluse's TG egress is flaky,
+        # and losing the actual reply to a one-off blip is what reads as "ignored me".
+        try:
+            return await context.bot.send_message(
+                chat_id=chat_id, reply_to_message_id=reply_to, **kwargs)
+        except (TimedOut, NetworkError) as exc:
+            logger.warning("send_message timed out chat_id=%d — retrying once: %s", chat_id, exc)
+            await asyncio.sleep(1.5)
+            return await context.bot.send_message(
+                chat_id=chat_id, reply_to_message_id=reply_to, **kwargs)
+
     try:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=reply,
-            reply_to_message_id=reply_to,
-            parse_mode=ParseMode.HTML,
-        )
+        await _deliver(text=reply, parse_mode=ParseMode.HTML)
     except BadRequest as exc:
         if "parse" in str(exc).lower() or "entity" in str(exc).lower():
             logger.warning(
                 "HTML parse failed chat_id=%d — retrying as plain text: %s",
                 chat_id, exc,
             )
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=reply,
-                reply_to_message_id=reply_to,
-            )
+            await _deliver(text=reply)
         else:
             raise
     await metrics_db.increment_chat_metric(chat_id, "chat_replies_sent")
