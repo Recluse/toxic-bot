@@ -36,3 +36,8 @@ cache/
 .DS_Store
 .idea/
 .vscode/
+
+# Local-only ops/architecture notes — never publish (esp. to the public GitHub mirror)
+docs/
+plan/
+rules
