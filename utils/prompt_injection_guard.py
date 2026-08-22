@@ -142,6 +142,16 @@ def _strip_explained_matches(text: str, matches: list[dict[str, Any]]) -> set[st
         name = m.get("name")
         if not name:
             continue
+        # This is a text-only chat bot: no tool-use, function-calling, shell, or
+        # code-execution surface. The scanner's "tool_use" category (reverse
+        # shells, command execution, etc.) therefore cannot act on anything here
+        # — such strings are users quoting exploits / logs / CVEs in a security
+        # chat, not an injection that could succeed. Suppress the whole category
+        # as a false positive for this bot's threat model. Real injection
+        # classes (jailbreak, instruction override, system-prompt exfiltration,
+        # persona swap) are other categories and stay active.
+        if m.get("category") == "tool_use":
+            continue
         if name == "encoding_base64_payload" and _is_url_payload_explained(text):
             continue
         if name == "unicode_smuggling" and _is_unicode_smuggling_benign(text):
