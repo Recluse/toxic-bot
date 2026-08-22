@@ -12,6 +12,7 @@ Exposes:
 """
 
 import logging
+import re
 
 from openai import AsyncOpenAI
 
@@ -82,7 +83,13 @@ async def chat_completion(messages: list[dict], **kwargs) -> str:
 
 
 async def vision_completion(messages: list[dict], **kwargs) -> str:
-    """Call the vision-capable model (Llama 4 Scout)."""
+    """Call the vision-capable model (qwen3.6-27b via Groq).
+
+    qwen3.6 is a reasoning model: it prefixes its answer with a <think>…</think>
+    block. Give it extra room so the reasoning tokens do not starve the actual
+    description, and strip the reasoning block before returning so only the
+    factual description reaches the text model downstream.
+    """
     client = get_groq_client()
 
     logger.debug("vision_completion request: model=%s messages=%s", config.groq.vision_model, messages)
@@ -90,10 +97,12 @@ async def vision_completion(messages: list[dict], **kwargs) -> str:
         model=      config.groq.vision_model,
         messages=   messages,
         temperature=kwargs.get("temperature", config.groq.temperature),
-        max_tokens= kwargs.get("max_tokens",  config.groq.max_tokens),
+        max_tokens= kwargs.get("max_tokens",  max(config.groq.max_tokens, 2048)),
         top_p=      kwargs.get("top_p",       config.groq.top_p),
     )
-    reply = response.choices[0].message.content
+    reply = response.choices[0].message.content or ""
+    # Strip the reasoning model's <think>…</think> preamble.
+    reply = re.sub(r"(?is)<think>.*?</think>", "", reply).strip()
     logger.debug("vision_completion response: %s", reply)
     return reply
 

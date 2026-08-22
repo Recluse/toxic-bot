@@ -176,8 +176,8 @@ def load_config(ini_path: str = "config.ini") -> AppConfig:
         ),
         groq=GroqConfig(
             model=        ini.get(      "groq", "model",         fallback="openai/gpt-oss-120b"),
-            fallback_model=ini.get(     "groq", "fallback_model", fallback="llama-3.3-70b-versatile"),
-            vision_model= ini.get(      "groq", "vision_model",  fallback="meta-llama/llama-4-scout-17b-16e-instruct"),
+            fallback_model=ini.get(     "groq", "fallback_model", fallback="openai/gpt-oss-20b"),
+            vision_model= ini.get(      "groq", "vision_model",  fallback="qwen/qwen3.6-27b"),
             whisper_model=ini.get(      "groq", "whisper_model", fallback="whisper-large-v3-turbo"),
             temperature=  ini.getfloat( "groq", "temperature",   fallback=0.85),
             max_tokens=   ini.getint(   "groq", "max_tokens",    fallback=1024),
@@ -186,7 +186,7 @@ def load_config(ini_path: str = "config.ini") -> AppConfig:
             base_url=_cf_groq_url(cf_account_id, cf_gateway_id),
         ),
         summarizer=SummarizerConfig(
-            model=      ini.get(     "summarizer", "model",       fallback="llama-3.3-70b-versatile"),
+            model=      ini.get(     "summarizer", "model",       fallback="openai/gpt-oss-20b"),
             max_tokens= ini.getint(  "summarizer", "max_tokens",  fallback=512),
             temperature=ini.getfloat("summarizer", "temperature", fallback=0.3),
         ),
