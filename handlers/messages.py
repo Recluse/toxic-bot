@@ -71,6 +71,13 @@ _msg_counters: dict[int, int] = defaultdict(int)
 # reads as "the bot is necroposting".
 _RANDOM_REPLY_MAX_AGE_SEC = 30
 
+# Any reply (not only the random path) to a message older than this is logged as
+# a NECROPOST warning with full provenance. The server otherwise records only
+# WHEN a message was processed, never its authored date or edit-status — so an
+# "why did the bot answer a months-old message?" case is impossible to explain
+# after the fact. This makes the next one explainable from one grep.
+_NECROPOST_WARN_DAYS = 1.0
+
 # Canned "you're poking too fast" replies, sent WITHOUT the LLM when a user hits
 # the per-user reply cooldown (one question a minute), in the bot's toxic voice.
 _COOLDOWN_QUIPS = [
@@ -106,6 +113,17 @@ def _message_age_seconds(message) -> float:
 
     age = (datetime.now(timezone.utc) - msg_date.astimezone(timezone.utc)).total_seconds()
     return max(age, 0.0)
+
+
+def _fmt_dt(dt) -> str | None:
+    """Format a datetime as UTC ISO for logs; None-safe."""
+    if dt is None:
+        return None
+    try:
+        return dt.astimezone(timezone.utc).isoformat()
+    except Exception:
+        return str(dt)
+
 
 async def handle_message(
     update: Update,
@@ -411,6 +429,43 @@ async def handle_message(
 
     if not should_reply:
         return
+
+    # --- Provenance diagnostic (added 2026-08-22) ---
+    # The server records only WHEN a message was processed, never its authored
+    # date or edit-status. This line captures both so a future "why did the bot
+    # answer a months-old message?" is explainable from one grep: whether the
+    # update was an edit (edited_update / edit_date), the authored date, the age,
+    # and the reply anchor. A reply to anything older than _NECROPOST_WARN_DAYS
+    # is additionally flagged as NECROPOST.
+    _age_days = _message_age_seconds(message) / 86400.0
+    _rt = message.reply_to_message
+    logger.info(
+        "Reply provenance chat_id=%d msg_id=%d date=%s edit_date=%s edited_update=%s "
+        "age_days=%.2f reply_to_id=%s reply_to_date=%s reply_to_from_bot=%s reason=%s",
+        chat_id,
+        message.message_id,
+        _fmt_dt(getattr(message, "date", None)),
+        _fmt_dt(getattr(message, "edit_date", None)),
+        update.edited_message is not None,
+        _age_days,
+        (_rt.message_id if _rt else None),
+        (_fmt_dt(getattr(_rt, "date", None)) if _rt else None),
+        (bool(_rt.from_user and _rt.from_user.id == bot_id) if _rt else None),
+        llm_reason,
+    )
+    if _age_days > _NECROPOST_WARN_DAYS:
+        logger.warning(
+            "NECROPOST? bot replying to a message aged %.1f days — chat_id=%d msg_id=%d "
+            "date=%s edit_date=%s edited_update=%s reason=%s reply_to_id=%s",
+            _age_days,
+            chat_id,
+            message.message_id,
+            _fmt_dt(getattr(message, "date", None)),
+            _fmt_dt(getattr(message, "edit_date", None)),
+            update.edited_message is not None,
+            llm_reason,
+            (_rt.message_id if _rt else None),
+        )
 
     # Update the user's profile only for messages that passed reply gating.
     if text and not history_db.is_noise(text):
