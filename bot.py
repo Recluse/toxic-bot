@@ -14,10 +14,12 @@ import asyncio
 import logging
 import os
 import socket
+import time
 from datetime import datetime
 
 import httpx
 from telegram import Update
+from telegram.error import NetworkError
 from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
@@ -86,6 +88,17 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 _WATCHDOG_INTERVAL = 60.0      # seconds between liveness probes
 _WATCHDOG_MAX_FAILS = 3        # consecutive failed probes → force restart (~3 min)
+
+# Startup network-flap resilience (added 2026-08-23). PTB's Application.initialize()
+# calls get_me() BEFORE the polling bootstrap, and that call is NOT covered by
+# bootstrap_retries — so a proxy/TLS ConnectTimeout at startup raised an unhandled
+# telegram.error.TimedOut and killed the process, which systemd then crash-looped
+# until the proxy recovered (observed 2026-08-23: ~04:20 and ~11:58 MSK, ~5 and ~15
+# restarts). main() now retries startup in-process (fresh event loop + rebuilt
+# Application) and reports the flap to superadmins once it comes back up.
+_STARTUP_BACKOFF_START = 5.0    # seconds before the first retry
+_STARTUP_BACKOFF_MAX = 60.0     # backoff cap
+_startup_flap_attempts = 0      # failed startup attempts before the current successful start
 
 
 def _keepalive_socket_options() -> list[tuple]:
@@ -186,6 +199,14 @@ async def _notify_superadmins_startup(application: Application) -> None:
         f"Model: <code>{config.groq.model}</code>\n"
         f"Time:  <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"
     )
+    # If we only came up after retrying through a network flap, say so — a silent
+    # restart otherwise looks mysterious (see main()'s startup-retry loop).
+    if _startup_flap_attempts > 0:
+        text += (
+            f"\n⚠️ <b>Был флап сети:</b> поднялись с попытки "
+            f"№{_startup_flap_attempts + 1} — прокси/TLS не отвечал на старте, "
+            f"переподключились."
+        )
 
     for sa_id in config.superadmin_ids:
         try:
@@ -285,8 +306,12 @@ async def _antiflood_guard(update: Update, context) -> None:
         raise ApplicationHandlerStop
 
 
-def main() -> None:
-    """Build and run the bot application."""
+def _build_application() -> Application:
+    """Construct a fresh Application with all handlers wired up.
+
+    Called once per startup attempt (see main()), so a start retried after a
+    network flap begins from clean state.
+    """
     # Explicit finite timeouts so a wedged long-poll (e.g. the egress proxy silently
     # dropping the getUpdates connection) raises ReadTimeout and PTB reconnects, instead
     # of hanging forever in epoll_wait. get_updates read_timeout must exceed run_polling's
@@ -353,14 +378,45 @@ def main() -> None:
 
     # anti-flood / ban guard runs before all other handlers (group -1)
     app.add_handler(TypeHandler(Update, _antiflood_guard), group=-1)
+    return app
 
-    logger.info("Starting polling")
-    app.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        timeout=30,            # long-poll seconds (< get_updates read_timeout=45)
-        poll_interval=1.0,
-        bootstrap_retries=-1,  # retry forever on startup network errors
-    )
+
+def main() -> None:
+    """Build and run the bot, retrying startup across network flaps.
+
+    PTB's run_polling runs Application.initialize() (which calls get_me()) BEFORE the
+    polling bootstrap, and that get_me() is NOT covered by bootstrap_retries. A
+    proxy/TLS ConnectTimeout there used to raise an unhandled telegram.error.TimedOut
+    and drop the process into a systemd crash-loop until the proxy recovered. Here we
+    instead catch NetworkError, back off, and retry in-process with a fresh event loop
+    (run_polling does get_event_loop() then loop.close(), so a retry must supply a new,
+    open loop) and a freshly-built Application. Non-network errors (bad token, bugs)
+    still propagate and crash loudly. On the successful start after >=1 failed attempt,
+    _on_startup reports the flap to superadmins.
+    """
+    global _startup_flap_attempts
+    _startup_flap_attempts = 0
+    backoff = _STARTUP_BACKOFF_START
+    while True:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        app = _build_application()
+        try:
+            logger.info("Starting polling")
+            app.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                timeout=30,            # long-poll seconds (< get_updates read_timeout=45)
+                poll_interval=1.0,
+                bootstrap_retries=-1,  # retry forever on the getUpdates bootstrap
+            )
+            return  # clean shutdown (SIGTERM/SIGINT) — do not retry
+        except NetworkError as exc:
+            _startup_flap_attempts += 1
+            logger.warning(
+                "Startup network error (attempt %d): %s — retrying in %.0fs",
+                _startup_flap_attempts, exc, backoff,
+            )
+            time.sleep(backoff)
+            backoff = min(backoff * 2, _STARTUP_BACKOFF_MAX)
 
 
 if __name__ == "__main__":
