@@ -281,6 +281,30 @@ def _add_settings_command(app: Application) -> None:
     app.add_handler(CommandHandler("settings", cmd_settings))
 
 
+# --- Duplicate-update guard (added 2026-08-24) ---
+# Telegram getUpdates can redeliver an update if the offset ack didn't land (the
+# egress proxy blipping is enough). Without dedup the same message is processed
+# twice — observed 2026-08-24 as a full reply followed by a stray "one question a
+# minute" cooldown quip on the SAME message (msg 818149). We drop any update_id
+# already handled, before any other handler runs.
+_SEEN_UPDATE_MAX = 2048
+_seen_update_ids: dict[int, None] = {}
+
+
+async def _dedupe_guard(update: Update, context) -> None:
+    """Drop a redelivered update (same update_id) before any handler runs."""
+    uid = getattr(update, "update_id", None)
+    if uid is None:
+        return
+    if uid in _seen_update_ids:
+        logger.warning("Duplicate update_id=%d dropped (getUpdates redelivery)", uid)
+        raise ApplicationHandlerStop
+    _seen_update_ids[uid] = None
+    if len(_seen_update_ids) > _SEEN_UPDATE_MAX:
+        # dict preserves insertion order → the first key is the oldest
+        _seen_update_ids.pop(next(iter(_seen_update_ids)))
+
+
 # --- anti-flood / ban guard (added 2026-06-03) ---
 _BANNED_IDS = {376895691}
 _flood_hits = {}
@@ -375,6 +399,10 @@ def _build_application() -> Application:
             handle_message,
         )
     )
+
+    # duplicate-update dedup runs before everything (group -2), so a redelivered
+    # update is dropped before it can trigger a second reply.
+    app.add_handler(TypeHandler(Update, _dedupe_guard), group=-2)
 
     # anti-flood / ban guard runs before all other handlers (group -1)
     app.add_handler(TypeHandler(Update, _antiflood_guard), group=-1)
