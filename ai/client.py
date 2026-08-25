@@ -30,6 +30,23 @@ def _is_over_capacity_error(exc: Exception) -> bool:
     return status == 503 or "over capacity" in msg
 
 
+def _trim_to_last_sentence(text: str) -> str:
+    """Trim a truncated reply back to its last complete sentence so a reply that
+    hit the token ceiling doesn't end mid-word. If the last sentence boundary is in
+    the first half of the text, return it unchanged (better a rough cut than losing
+    most of the reply)."""
+    text = (text or "").rstrip()
+    if not text:
+        return text
+    cut = max(text.rfind(c) for c in ".!?…")
+    if cut < len(text) * 0.5:
+        return text
+    end = cut + 1
+    while end < len(text) and text[end] in "»\"')]":
+        end += 1
+    return text[:end].rstrip()
+
+
 def get_groq_client() -> AsyncOpenAI:
     """Return the shared AsyncOpenAI instance pointed at Groq, creating on first call."""
     global _client
@@ -77,7 +94,14 @@ async def chat_completion(messages: list[dict], **kwargs) -> str:
         else:
             raise
 
-    reply = response.choices[0].message.content
+    choice = response.choices[0]
+    reply = choice.message.content or ""
+    # A reply that hit the token ceiling stops mid-word; trim back to the last
+    # complete sentence so it never looks abruptly chopped. get_reply gives chat
+    # replies a 2048-token budget, so this rarely triggers.
+    if choice.finish_reason == "length":
+        reply = _trim_to_last_sentence(reply)
+        logger.info("chat_completion hit max_tokens — trimmed to last sentence (len=%d)", len(reply))
     logger.debug("chat_completion response: %s", reply)
     return reply
 

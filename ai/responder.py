@@ -167,7 +167,10 @@ async def _chat_reply(
     # any visible text.
     user_turn = f"{username}: {user_text}"
     messages.append({"role": "user", "content": user_turn})
-    reply = await chat_completion(messages)
+    # Cyrillic is token-heavy: the 1024 default truncated long replies mid-word
+    # (observed 2026-08-25). 2048 (~1700 Cyrillic chars) covers normal chat replies;
+    # chat_completion trims to the last sentence if a reply still hits the limit.
+    reply = await chat_completion(messages, max_tokens=2048)
 
     # Persist both sides of the exchange so future requests have context
     await history_db.append(chat_id, user_id, "user",      f"{username}: {user_text}")
