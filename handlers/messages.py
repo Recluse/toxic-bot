@@ -140,6 +140,19 @@ async def handle_message(
     if not message or not chat:
         return
 
+    # Ignore edited messages — the bot replies only to NEW messages. Re-processing
+    # an edit re-answers the (often old) message: a "necropost" when the edit lands
+    # hours later (confirmed 2026-08-26 via the provenance log — edited_update=True
+    # on a ~14h-old reply-to-bot), or a double reply when a user quickly fixes a
+    # typo. The reply-to-bot / mention / owner branches have no age gate, so an edit
+    # must be dropped here before any of them fire.
+    if update.edited_message is not None or update.edited_channel_post is not None:
+        logger.debug(
+            "Ignored edited message chat_id=%d msg_id=%s",
+            chat.id, getattr(message, "message_id", None),
+        )
+        return
+
     chat_id = chat.id
     is_pm   = chat.type == ChatType.PRIVATE
 
