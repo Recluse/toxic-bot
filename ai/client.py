@@ -30,6 +30,27 @@ def _is_over_capacity_error(exc: Exception) -> bool:
     return status == 503 or "over capacity" in msg
 
 
+def _is_request_too_large(exc: Exception) -> bool:
+    """Detect Groq 413 / TPM rate-limit / context-too-large errors."""
+    status = getattr(exc, "status_code", None)
+    msg = str(exc).lower()
+    return (
+        status == 413
+        or "request too large" in msg
+        or "rate_limit" in msg
+        or "tokens per minute" in msg
+        or "reduce your message size" in msg
+    )
+
+
+def _trim_messages_for_retry(messages: list[dict], keep_recent: int = 4) -> list[dict]:
+    """Shrink an over-budget request: keep the system prompt (messages[0]) plus the
+    most recent `keep_recent` turns, dropping older history / reply-chain context."""
+    if len(messages) <= keep_recent + 1:
+        return messages
+    return [messages[0]] + messages[-keep_recent:]
+
+
 def _trim_to_last_sentence(text: str) -> str:
     """Trim a truncated reply back to its last complete sentence so a reply that
     hit the token ceiling doesn't end mid-word. If the last sentence boundary is in
@@ -89,6 +110,23 @@ async def chat_completion(messages: list[dict], **kwargs) -> str:
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                top_p=top_p,
+            )
+        elif _is_request_too_large(exc):
+            # TPM / context ceiling (Groq 413): retry once with trimmed context
+            # (system prompt + most recent turns) and a smaller output budget, so
+            # the bot still replies — with less memory — instead of erroring out.
+            trimmed = _trim_messages_for_retry(messages)
+            retry_tokens = min(max_tokens, 1024)
+            logger.warning(
+                "Request too large / rate-limited (%s) — retrying with %d/%d msgs, max_tokens=%d",
+                exc, len(trimmed), len(messages), retry_tokens,
+            )
+            response = await client.chat.completions.create(
+                model=model,
+                messages=trimmed,
+                temperature=temperature,
+                max_tokens=retry_tokens,
                 top_p=top_p,
             )
         else:
