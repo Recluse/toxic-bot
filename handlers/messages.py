@@ -356,6 +356,7 @@ async def handle_message(
         and not photo_file_id
         and not is_owner_trigger
         and not mentions_bot
+        and not is_reply_to_bot
     ):
         logger.debug("Too short (%d < %d) — ignored chat_id=%d", word_count, min_words, chat_id)
         return
