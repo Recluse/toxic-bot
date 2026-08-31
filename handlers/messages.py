@@ -57,6 +57,7 @@ from utils.prompt_injection_guard import (
 from utils.admin_check import is_owner, is_superadmin
 from utils.reply_chain import collect_chain
 from utils.tg_sender import resolve_message_actor
+from utils.tg_format import render_for_telegram, strip_to_plain
 
 logger = logging.getLogger(__name__)
 
@@ -605,14 +606,14 @@ async def handle_message(
                 chat_id=chat_id, reply_to_message_id=reply_to, **kwargs)
 
     try:
-        await _deliver(text=reply, parse_mode=ParseMode.HTML)
+        await _deliver(text=render_for_telegram(reply), parse_mode=ParseMode.HTML)
     except BadRequest as exc:
         if "parse" in str(exc).lower() or "entity" in str(exc).lower():
             logger.warning(
                 "HTML parse failed chat_id=%d — retrying as plain text: %s",
                 chat_id, exc,
             )
-            await _deliver(text=reply)
+            await _deliver(text=strip_to_plain(reply))
         else:
             raise
     await metrics_db.increment_chat_metric(chat_id, "chat_replies_sent")

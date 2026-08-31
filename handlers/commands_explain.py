@@ -15,9 +15,6 @@ scientific pedant persona with peer-reviewed source references.
 """
 
 import logging
-import re
-
-import html
 
 from telegram import Update, ReplyParameters
 from telegram.constants import ParseMode, ChatAction, ChatType, MessageEntityType
@@ -40,6 +37,7 @@ from utils.prompt_injection_guard import (
 from utils.admin_check import is_superadmin
 from utils.rate_limiter import check_and_set_explain, check_pm_explain_quota, check_pm_media_quota
 from utils.tg_sender import resolve_message_actor
+from utils.tg_format import render_for_telegram, balance_html_tags, strip_to_plain
 from utils.tg_safe import send_ephemeral_text
 
 logger = logging.getLogger(__name__)
@@ -289,89 +287,6 @@ async def cmd_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             pass
 
 
-def _sanitize_telegram_html(text: str) -> str:
-    """Sanitize HTML output for Telegram's limited HTML subset.
-
-    Telegram supports only a small set of HTML tags. Some LLMs (and the user’s
-    prompt) may produce tags like <sup>/<sub> which are rejected.
-
-    This function:
-    - Converts <sup>...</sup> to ^... and <sub>...</sub> to _... to preserve
-      math-like notation.
-    - Removes any unsupported HTML tags while keeping their text content.
-    """
-
-    # Convert common math-style tags into text-friendly notations.
-    text = re.sub(r"<sup>(.*?)</sup>", lambda m: f"^{m.group(1)}", text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<sub>(.*?)</sub>", lambda m: f"_{m.group(1)}", text, flags=re.IGNORECASE | re.DOTALL)
-
-    # Telegram supports only the following tags in HTML parse mode.
-    allowed = {"b", "i", "u", "s", "strong", "em", "code", "pre", "a"}
-
-    def _keep_tag(m: re.Match) -> str:
-        tag = m.group(1).lower()
-        if tag in allowed:
-            return m.group(0)
-        return ""
-
-    # Strip unsupported tags but keep their inner text unchanged.
-    return re.sub(r"</?([a-zA-Z0-9]+)(?:\s+[^>]*)?>", _keep_tag, text)
-
-
-def _repair_html_tags(text: str) -> str:
-    """Make HTML tags balanced so Telegram can parse them.
-
-    Telegram rejects messages with mismatched tags (e.g. <b>...</i>). This
-    tries to fix simple cases by ignoring a mismatched closing tag and by
-    automatically closing any remaining open tags at the end.
-
-    Supported tags are those that Telegram accepts (and a few we generate
-    ourselves): <b>, <i>, <u>, <s>, <strong>, <em>, <code>, <pre>, <a>.
-    """
-
-    supported_tags = {"b", "i", "u", "s", "strong", "em", "code", "pre", "a"}
-
-    tags: list[str] = []
-    out: list[str] = []
-    i = 0
-    while i < len(text):
-        if text[i] == "<":
-            end = text.find(">", i + 1)
-            if end == -1:
-                out.append(text[i:])
-                break
-
-            tag = text[i + 1:end].strip()
-            is_closing = tag.startswith("/")
-            tag_name = tag[1:] if is_closing else tag
-            tag_name = tag_name.split()[0].lower()
-
-            if tag_name in supported_tags:
-                if is_closing:
-                    if tags and tags[-1] == tag_name:
-                        tags.pop()
-                        out.append(text[i:end + 1])
-                    else:
-                        # Ignore mismatched closing tag (Telegram will reject it)
-                        pass
-                else:
-                    tags.append(tag_name)
-                    out.append(text[i:end + 1])
-            else:
-                # Drop unsupported tag entirely.
-                pass
-
-            i = end + 1
-        else:
-            out.append(text[i])
-            i += 1
-
-    while tags:
-        out.append(f"</{tags.pop()}>")
-
-    return "".join(out)
-
-
 def _chunk_html_text(text: str, max_len: int = 3500) -> list[str]:
     """Split HTML text into smaller chunks while respecting basic tag boundaries.
 
@@ -424,17 +339,18 @@ def _chunk_html_text(text: str, max_len: int = 3500) -> list[str]:
 async def _send_explain_parts(bot, chat_id: int, text: str, reply_to: int) -> None:
     """Split long explain responses into multiple HTML-formatted messages."""
 
-    # Sanitize LLM output for Telegram HTML parse mode.
-    sanitized = _sanitize_telegram_html(text)
-    repaired = _repair_html_tags(sanitized)
+    # Normalise the model's mixed markup to safe Telegram HTML (see utils.tg_format:
+    # markdown->HTML, stray <>& escaped, unsupported tags dropped, tags balanced).
+    repaired = render_for_telegram(text)
 
-    chunks = _chunk_html_text(repaired, max_len=3500)
+    # 3400 leaves room for the <blockquote expandable> wrapper under the 4096 cap.
+    chunks = _chunk_html_text(repaired, max_len=3400)
 
     for chunk in chunks:
         try:
             await bot.send_message(
                 chat_id=chat_id,
-                text=chunk,
+                text=f"<blockquote expandable>{balance_html_tags(chunk)}</blockquote>",
                 parse_mode=ParseMode.HTML,
                 reply_parameters=ReplyParameters(
                     message_id=reply_to,
@@ -445,7 +361,7 @@ async def _send_explain_parts(bot, chat_id: int, text: str, reply_to: int) -> No
             err = str(exc)
             if "Can't parse entities" in err or "unsupported start tag" in err:
                 # Fallback to a safer format without HTML tags.
-                safe_text = html.escape(chunk)
+                safe_text = strip_to_plain(chunk)
                 try:
                     await bot.send_message(
                         chat_id=chat_id,
