@@ -196,7 +196,11 @@ async def _notify_superadmins_startup(application: Application) -> None:
 
     text = (
         "🟢 <b>TOXIC bot started</b>\n"
-        f"Model: <code>{config.groq.model}</code>\n"
+        f"Chat:  <code>{config.groq.model}</code>\n"
+        f"Fallback:  <code>{config.groq.fallback_model}</code>\n"
+        f"Vision:  <code>{config.groq.vision_model}</code>\n"
+        f"Whisper:  <code>{config.groq.whisper_model}</code>\n"
+        f"Summarizer:  <code>{config.summarizer.model}</code>\n"
         f"Time:  <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"
     )
     # If we only came up after retrying through a network flap, say so — a silent
