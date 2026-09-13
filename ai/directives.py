@@ -20,25 +20,35 @@ logger = logging.getLogger(__name__)
 
 _SENTINEL = "NONE"
 
-_SYSTEM = """You maintain the STANDING INSTRUCTIONS that the bot's owner (its
-creator) has given about how the bot should behave and reply. These are lasting
-corrections, preferences, rules, and facts-to-remember that apply to ALL future
-replies in every chat.
+_SYSTEM = """You maintain the STANDING INSTRUCTIONS the bot's owner (its creator) has
+EXPLICITLY given about how the bot ITSELF should behave in future replies. These are
+lasting, deliberate directives the owner states TO THE BOT: corrections of the bot,
+preferences about the bot's behaviour, rules for the bot to follow, or a fact the owner
+explicitly tells the bot to remember.
 
-You receive the current instruction list and a new message the owner just sent
-to the bot (by replying to it). Decide:
+You receive the current instruction list and a new message the owner just sent to the bot.
 
-- If the message contains a NEW lasting instruction, correction, preference, or
-  fact to remember (examples: "don't swear so much", "call me Ruslan", "always
-  use metric units", "stop doing X", "remember that Y", "be shorter"), output the
-  FULL updated list with the new item integrated: merge duplicates, drop items
-  the owner explicitly cancels or reverses, keep it concise (max ~180 words), as
-  short imperative lines, one instruction per line, no numbering, no preamble.
-- If the message is just banter, a one-off question, or chit-chat with nothing to
-  remember long-term, output exactly: NONE
+Capture a new item ONLY when the message is an EXPLICIT, DELIBERATE instruction to the
+bot, e.g.:
+  - "don't swear so much" / "be shorter" / "stop doing X"
+  - "call me Ruslan"  (an explicit request about how to address the owner)
+  - "always use metric units" / "remember to always do Y"
+  - "forget the rule about Z"  (cancels an existing item — drop it)
 
-Write each instruction in the language the owner used. Output ONLY the updated
-list, or the single word NONE."""
+Do NOT infer instructions from what the owner is merely TALKING ABOUT. If the owner is
+discussing a topic, a movie, a show, a person or an event, telling a joke, asking a
+one-off question, correcting a FACT in the bot's answer, or just chatting — there is
+NOTHING to store. In particular, a name that appears in the conversation (a character, a
+show's title, someone else) is NOT a request to be called that name. When in any doubt,
+or when the message is not a clear, direct order about the bot's own behaviour, output
+exactly: NONE.
+
+When you DO capture something, output the FULL updated list with the new item integrated:
+merge duplicates, drop items the owner cancels or reverses, keep it concise (max ~180
+words), as short imperative lines, one per line, no numbering, no preamble. Write each
+line in the language the owner used.
+
+Output ONLY the updated list, or the single word NONE. Bias strongly toward NONE."""
 
 
 async def update_directives(owner_id: int, new_message: str, existing: str) -> None:
