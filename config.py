@@ -177,7 +177,7 @@ def load_config(ini_path: str = "config.ini") -> AppConfig:
         groq=GroqConfig(
             model=        ini.get(      "groq", "model",         fallback="openai/gpt-oss-120b"),
             fallback_model=ini.get(     "groq", "fallback_model", fallback="openai/gpt-oss-20b"),
-            vision_model= ini.get(      "groq", "vision_model",  fallback="qwen/qwen3.6-27b"),
+            vision_model= ini.get(      "groq", "vision_model",  fallback="qwen/qwen3.8-27b"),
             whisper_model=ini.get(      "groq", "whisper_model", fallback="whisper-large-v3-turbo"),
             temperature=  ini.getfloat( "groq", "temperature",   fallback=0.85),
             max_tokens=   ini.getint(   "groq", "max_tokens",    fallback=1024),

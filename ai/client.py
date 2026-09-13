@@ -145,12 +145,16 @@ async def chat_completion(messages: list[dict], **kwargs) -> str:
 
 
 async def vision_completion(messages: list[dict], **kwargs) -> str:
-    """Call the vision-capable model (qwen3.6-27b via Groq).
+    """Call the vision model (qwen3.8-27b via Groq) for image description / OCR.
 
-    qwen3.6 is a reasoning model: it prefixes its answer with a <think>…</think>
-    block. Give it extra room so the reasoning tokens do not starve the actual
-    description, and strip the reasoning block before returning so only the
-    factual description reaches the text model downstream.
+    qwen is a reasoning model: left to itself it spends the whole token budget on
+    an internal <think>…</think> block, truncates before finishing the actual text
+    transcription, and leaks the reasoning into the description (observed 2026-09-13
+    as garbled/fragmented OCR). reasoning_format="hidden" keeps the reasoning
+    internal and returns only the answer — A/B-tested to read Cyrillic-on-plain-
+    background text cleanly where 3.6 garbled it. max_tokens stays at 1024 (proven
+    under qwen's per-request output cap; 3.6 429s above ~1000 OTPM). The <think>
+    strip is belt-and-suspenders in case any reasoning still leaks.
     """
     client = get_groq_client()
 
@@ -159,12 +163,15 @@ async def vision_completion(messages: list[dict], **kwargs) -> str:
         model=      config.groq.vision_model,
         messages=   messages,
         temperature=kwargs.get("temperature", config.groq.temperature),
-        max_tokens= kwargs.get("max_tokens",  max(config.groq.max_tokens, 2048)),
+        max_tokens= kwargs.get("max_tokens",  1024),
         top_p=      kwargs.get("top_p",       config.groq.top_p),
+        extra_body={"reasoning_format": "hidden"},
     )
     reply = response.choices[0].message.content or ""
-    # Strip the reasoning model's <think>…</think> preamble.
-    reply = re.sub(r"(?is)<think>.*?</think>", "", reply).strip()
+    # Belt-and-suspenders: strip any reasoning that still leaks (closed or unclosed).
+    reply = re.sub(r"(?is)<think>.*?</think>", "", reply)
+    reply = re.sub(r"(?is)<think>.*$", "", reply)
+    reply = reply.strip()
     logger.debug("vision_completion response: %s", reply)
     return reply
 
